@@ -237,18 +237,19 @@ export function useCachedSession(sessionId: string): {
 
     let cancelled = false;
     const requestId = ++latestRequestIdRef.current;
-    const hasCachedData = Boolean(cachedGraph?.session);
-    const cachedAt = cachedGraph?.session._cached_at ?? 0;
+    const cachedGraphWithSession = cachedGraph?.session ? cachedGraph : null;
+    const hasCachedData = cachedGraphWithSession !== null;
+    const cachedAt = cachedGraphWithSession?.session._cached_at ?? 0;
     const cachedIsExpired = hasCachedData ? isCacheExpired(cachedAt) : false;
     const cachedIsStale = hasCachedData ? isCacheStale(cachedAt) : false;
     const forceRevalidate = revalidateTick !== consumedRevalidateTickRef.current;
     consumedRevalidateTickRef.current = revalidateTick;
 
-    if (hasCachedData && !cachedIsExpired) {
+    if (cachedGraphWithSession && !cachedIsExpired) {
       setState({
-        session: cachedGraph.session,
-        receipts: cachedGraph.receipts,
-        lineItems: cachedGraph.lineItems,
+        session: cachedGraphWithSession.session,
+        receipts: cachedGraphWithSession.receipts,
+        lineItems: cachedGraphWithSession.lineItems,
         isLoading: false,
         isRevalidating: forceRevalidate || cachedIsStale,
         isOffline: typeof navigator !== "undefined" ? !navigator.onLine : false,
@@ -314,11 +315,11 @@ export function useCachedSession(sessionId: string): {
       }
 
       const offline = typeof navigator !== "undefined" ? !navigator.onLine : false;
-      if (hasCachedData && cachedGraph) {
+      if (cachedGraphWithSession) {
         safeSetState({
-          session: cachedGraph.session,
-          receipts: cachedGraph.receipts,
-          lineItems: cachedGraph.lineItems,
+          session: cachedGraphWithSession.session,
+          receipts: cachedGraphWithSession.receipts,
+          lineItems: cachedGraphWithSession.lineItems,
           isLoading: false,
           isRevalidating: false,
           isOffline: true,

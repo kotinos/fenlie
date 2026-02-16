@@ -42,18 +42,29 @@ const DrawerContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
   <DrawerPortal>
-    <DrawerOverlay />
-    <DrawerPrimitive.Content
-      ref={ref}
+    {/* Flexbox centering wrapper: prevents modal shift on input focus (no transform-based centering) */}
+    <div
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-lg border bg-background data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom md:inset-x-auto md:bottom-auto md:left-1/2 md:top-20 md:mt-0 md:max-h-screen md:w-full md:max-w-lg md:-translate-x-1/2 md:rounded-xl md:border md:data-[state=closed]:fade-out-0 md:data-[state=closed]:zoom-out-95 md:data-[state=closed]:slide-out-to-bottom-0 md:data-[state=open]:fade-in-0 md:data-[state=open]:zoom-in-95 md:data-[state=open]:slide-in-from-bottom-0",
-        className
+        "fixed inset-0 z-50 flex flex-col justify-end md:justify-center md:items-center overflow-y-auto md:p-4"
       )}
-      {...props}
     >
-      <div className="mx-auto mt-4 h-2 w-24 rounded-full bg-muted md:hidden" />
-      {children}
-    </DrawerPrimitive.Content>
+      <DrawerOverlay className="absolute inset-0" />
+      <DrawerPrimitive.Content
+        ref={ref}
+        className={cn(
+          "relative z-50 mt-24 flex h-auto flex-col rounded-t-lg border bg-background w-full",
+          "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom",
+          "md:mt-0 md:max-h-[85vh] md:overflow-y-auto md:max-w-lg md:rounded-xl",
+          "md:data-[state=closed]:fade-out-0 md:data-[state=closed]:zoom-out-95 md:data-[state=closed]:slide-out-to-bottom-0",
+          "md:data-[state=open]:fade-in-0 md:data-[state=open]:zoom-in-95 md:data-[state=open]:slide-in-from-bottom-0",
+          className
+        )}
+        {...props}
+      >
+        <div className="mx-auto mt-4 h-2 w-24 rounded-full bg-muted md:hidden" />
+        {children}
+      </DrawerPrimitive.Content>
+    </div>
   </DrawerPortal>
 ))
 DrawerContent.displayName = "DrawerContent"

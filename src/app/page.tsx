@@ -280,6 +280,15 @@ function NewSessionDrawer({
     }
   }, [creatorName, extraParticipants, isSubmitting, onOpenChange, router, sessionName]);
 
+  const preventFocusScroll = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    const el = e.currentTarget;
+    const orig = el.scrollIntoView;
+    el.scrollIntoView = () => {};
+    requestAnimationFrame(() => {
+      el.scrollIntoView = orig;
+    });
+  }, []);
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground>
       <DrawerContent>
@@ -300,6 +309,7 @@ function NewSessionDrawer({
                 className="h-12"
                 value={sessionName}
                 onChange={(e) => setSessionName(e.target.value)}
+                onFocus={preventFocusScroll}
                 autoFocus
               />
             </div>
@@ -314,6 +324,7 @@ function NewSessionDrawer({
                 className="h-12"
                 value={creatorName}
                 onChange={(e) => setCreatorName(e.target.value)}
+                onFocus={preventFocusScroll}
               />
               {creatorName.trim() ? (
                 <div className="pt-1">
@@ -335,6 +346,7 @@ function NewSessionDrawer({
                   value={nextParticipant}
                   onChange={(e) => setNextParticipant(e.target.value)}
                   placeholder="Add participant"
+                  onFocus={preventFocusScroll}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();

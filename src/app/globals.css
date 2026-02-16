@@ -187,4 +187,9 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Prevent layout shift when modal/drawer locks body scroll (scrollbar compensation) */
+  body[data-scroll-locked] {
+    overflow: hidden !important;
+    padding-right: var(--scrollbar-width, 0px) !important;
+  }
 }

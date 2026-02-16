@@ -25,7 +25,7 @@ export interface LineItem {
   description: string;
   amount: number;
   quantity: number;
-  claimed_by: string | null;
+  claimed_by: string[];
   claimed_at: string | null;
 }
 

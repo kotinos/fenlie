@@ -84,7 +84,7 @@ function mapLineItemRow(row: LineItemRow): LineItem {
     typeof row.claimed_by === "string"
       ? row.claimed_by
       : Array.isArray(row.claimed_by)
-        ? row.claimed_by[0] ?? null
+        ? row.claimed_by
         : null;
 
   return {
@@ -93,7 +93,7 @@ function mapLineItemRow(row: LineItemRow): LineItem {
     description: row.description,
     amount: toNumber(row.amount ?? row.total_price),
     quantity: toNumber(row.quantity) || 1,
-    claimed_by: claimedBy,
+    claimed_by: claimedBy ? [claimedBy].flat().filter(Boolean) : [],
     claimed_at: row.claimed_at ?? null,
   };
 }

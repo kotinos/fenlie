@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { useSplitCheckStore } from "@/lib/store";
 import { usePresence } from "@/hooks/use-presence";
-import { calculatePersonReceiptTotal } from "@/lib/calculations";
+import { calculateItemPersonShares, calculatePersonReceiptTotal } from "@/lib/calculations";
 import { announce, money } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { PageContainer } from "@/components/layout/PageContainer";
@@ -83,6 +83,23 @@ function formatClaimUnits(value: number): string {
 
 function getInitial(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?";
+}
+
+function getClaimersInOrder(claimedBy: string[]): string[] {
+  return Array.from(new Set(claimedBy.filter(Boolean)));
+}
+
+function getSingleQtySplitText(item: LineItem): string | null {
+  const claimers = getClaimersInOrder(item.claimedBy);
+  if (claimers.length === 0) return null;
+  const shares = calculateItemPersonShares(item);
+  const amounts = claimers.map((name) => shares[name] ?? 0);
+  if (amounts.length === 0) return null;
+  const min = Math.min(...amounts);
+  const max = Math.max(...amounts);
+  if (claimers.length === 1) return `${claimers[0]} · $${money(amounts[0])}`;
+  if (Math.abs(max - min) <= 0.009) return `Split ${claimers.length} ways · $${money(max)}/person`;
+  return `Split ${claimers.length} ways · $${money(min)}-$${money(max)}/person`;
 }
 
 function Toast({ data }: { data: ToastState | null }) {
@@ -362,6 +379,9 @@ function EditItemDrawer({
   }, [claimedByDraft, description, onOpenChange, onSave, qty, totalPrice, unitPrice]);
 
   const parsedQty = Number.parseFloat(qty) || 1;
+  const parsedTotalPrice =
+    Number.parseFloat(totalPrice) ||
+    parsedQty * (Number.parseFloat(unitPrice) || 0);
   const hasIntegerMultiQty = Number.isInteger(parsedQty) && parsedQty > 1;
   const claimCounts = useMemo(() => getClaimCounts(claimedByDraft), [claimedByDraft]);
   const totalAssignedUnits = useMemo(
@@ -369,6 +389,19 @@ function EditItemDrawer({
     [claimCounts]
   );
   const claimerNames = useMemo(() => Object.keys(claimCounts), [claimCounts]);
+  const singleQtyDraftSplitText = useMemo(() => {
+    if (hasIntegerMultiQty || claimerNames.length === 0) return null;
+    if (claimerNames.length === 1) return `${claimerNames[0]} pays $${money(parsedTotalPrice)}`;
+    const totalCents = Math.round(parsedTotalPrice * 100);
+    const roundedPerPerson = Math.round(totalCents / claimerNames.length);
+    const firstCents = totalCents - roundedPerPerson * (claimerNames.length - 1);
+    const min = Math.min(firstCents, roundedPerPerson) / 100;
+    const max = Math.max(firstCents, roundedPerPerson) / 100;
+    if (Math.abs(max - min) <= 0.009) {
+      return `Split ${claimerNames.length} ways · $${money(max)}/person`;
+    }
+    return `Split ${claimerNames.length} ways · $${money(min)}-$${money(max)}/person`;
+  }, [claimerNames, hasIntegerMultiQty, parsedTotalPrice]);
 
   const toggleParticipantClaim = useCallback(
     (person: string) => {
@@ -520,6 +553,9 @@ function EditItemDrawer({
                           ? `${Math.min(totalAssignedUnits, Math.trunc(parsedQty))}/${Math.trunc(parsedQty)} claimed`
                           : `${claimerNames.length} claiming`}
                       </p>
+                      {!hasIntegerMultiQty && singleQtyDraftSplitText ? (
+                        <p className="text-xs text-muted-foreground">{singleQtyDraftSplitText}</p>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -1290,10 +1326,6 @@ export default function ReceiptDetailPage() {
           call("setItemClaimQuantity", receipt.id, item.id, person, 0);
           return;
         }
-        if (remainingQty <= 0) {
-          showToast("Fully claimed", "warn");
-          return;
-        }
         call("setItemClaimQuantity", receipt.id, item.id, person, 1);
         return;
       }
@@ -1530,6 +1562,15 @@ export default function ReceiptDetailPage() {
               {receipt.lineItems.map((item) => {
                 const claimSummary = getClaimSummaryForItem(item);
                 const unclaimed = claimSummary.claimedQty === 0;
+                const isSingleQtyItem = claimSummary.totalQty === 1;
+                const singleQtyClaimers = isSingleQtyItem
+                  ? getClaimersInOrder(item.claimedBy)
+                  : [];
+                const singleQtySplitText = isSingleQtyItem ? getSingleQtySplitText(item) : null;
+                const currentUserHasSingleQtyClaim =
+                  currentUser && isSingleQtyItem
+                    ? (claimSummary.claimCounts[currentUser] ?? 0) > 0
+                    : false;
                 const editingBy = editingMap[item.id];
                 const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
                 const myEditing = editingBy === currentUser;
@@ -1615,6 +1656,27 @@ export default function ReceiptDetailPage() {
                       <p className="text-xs text-muted-foreground">
                         {claimSummary.claimedQty}/{claimSummary.totalQty} claimed
                       </p>
+                      {isSingleQtyItem && singleQtyClaimers.length > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <div className="flex -space-x-1.5">
+                            {singleQtyClaimers.slice(0, 5).map((person) => (
+                              <span
+                                key={person}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold text-white"
+                                style={{ backgroundColor: session.participantColors[person] ?? "#71717a" }}
+                                title={person}
+                              >
+                                {getInitial(person)}
+                              </span>
+                            ))}
+                          </div>
+                          {singleQtySplitText ? (
+                            <p className="text-xs font-medium text-muted-foreground">
+                              {singleQtySplitText}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {Object.entries(claimSummary.claimCounts).length > 0 ? (
                         <p className="text-xs text-muted-foreground">
                           {Object.entries(claimSummary.claimCounts)
@@ -1624,14 +1686,16 @@ export default function ReceiptDetailPage() {
                       ) : null}
                     </div>
 
-                    {unclaimed && currentUser && claimSummary.remainingQty > 0 && (
+                    {currentUser &&
+                      ((!isSingleQtyItem && unclaimed && claimSummary.remainingQty > 0) ||
+                        (isSingleQtyItem && !currentUserHasSingleQtyClaim)) && (
                       <button
                         onClick={() => onToggleClaim(item, currentUser)}
                         className="mt-2 text-sm font-medium text-amber-700 underline underline-offset-2 dark:text-amber-300"
                       >
                         Tap to claim for yourself
                       </button>
-                    )}
+                      )}
 
                     <div className="mt-2 flex items-center justify-end gap-1">
                       <button
@@ -1721,6 +1785,11 @@ export default function ReceiptDetailPage() {
                   {sortedLineItems.map((item) => {
                     const claimSummary = getClaimSummaryForItem(item);
                     const isUnclaimed = claimSummary.claimedQty === 0;
+                    const isSingleQtyItem = claimSummary.totalQty === 1;
+                    const singleQtyClaimers = isSingleQtyItem
+                      ? getClaimersInOrder(item.claimedBy)
+                      : [];
+                    const singleQtySplitText = isSingleQtyItem ? getSingleQtySplitText(item) : null;
                     const currentUserQty = currentUser
                       ? claimSummary.claimCounts[currentUser] ?? 0
                       : 0;
@@ -1753,6 +1822,29 @@ export default function ReceiptDetailPage() {
                               <p className="text-xs text-muted-foreground">
                                 {claimSummary.claimedQty}/{claimSummary.totalQty} claimed
                               </p>
+                              {isSingleQtyItem && singleQtyClaimers.length > 0 ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="flex -space-x-1">
+                                    {singleQtyClaimers.slice(0, 5).map((person) => (
+                                      <span
+                                        key={person}
+                                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-background text-[9px] font-semibold text-white"
+                                        style={{
+                                          backgroundColor: session.participantColors[person] ?? "#71717a",
+                                        }}
+                                        title={person}
+                                      >
+                                        {getInitial(person)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                  {singleQtySplitText ? (
+                                    <span className="text-xs text-muted-foreground">
+                                      {singleQtySplitText}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
                               <div className="flex flex-wrap gap-1">
                                 {Object.entries(claimSummary.claimCounts).map(([person, count]) => (
                                   <span

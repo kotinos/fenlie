@@ -58,7 +58,15 @@ function getClaimLimit(quantity: number): number {
   return 1;
 }
 
+function allowsSharedSingleClaims(quantity: number): boolean {
+  return getClaimLimit(quantity) <= 1;
+}
+
 function normalizeClaimsByLimit(claimedBy: string[], quantity: number): string[] {
+  if (allowsSharedSingleClaims(quantity)) {
+    // qty:1 rows support many claimers, but each person can only appear once.
+    return Array.from(new Set(claimedBy.filter(Boolean)));
+  }
   const limit = getClaimLimit(quantity);
   return claimedBy.slice(0, limit);
 }
@@ -556,6 +564,22 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
               lineItems: r.lineItems.map((li) => {
                 if (li.id !== lineItemId) return li;
                 const claimLimit = getClaimLimit(li.quantity);
+                if (claimLimit <= 1) {
+                  const dedupedClaims = Array.from(new Set(li.claimedBy.filter(Boolean)));
+                  if (targetQty <= 0) {
+                    return {
+                      ...li,
+                      claimedBy: dedupedClaims.filter((p) => p !== participantName),
+                    };
+                  }
+                  if (dedupedClaims.includes(participantName)) {
+                    return { ...li, claimedBy: dedupedClaims };
+                  }
+                  return {
+                    ...li,
+                    claimedBy: [...dedupedClaims, participantName],
+                  };
+                }
                 const otherClaims = li.claimedBy.filter((p) => p !== participantName);
                 const maxForPerson = Math.max(0, claimLimit - otherClaims.length);
                 const clampedQty = Math.min(targetQty, maxForPerson);
@@ -589,6 +613,10 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
     if (!receipt) return;
     receipt.lineItems.forEach((item) => {
       const claimLimit = getClaimLimit(item.quantity);
+      if (claimLimit <= 1) {
+        get().setItemClaimQuantity(receiptId, item.id, participantName, 1);
+        return;
+      }
       const currentPersonQty = getPersonClaimQty(item.claimedBy, participantName);
       const othersQty = item.claimedBy.length - currentPersonQty;
       const maxForPerson = Math.max(0, claimLimit - othersQty);
@@ -611,7 +639,7 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
               lineItems: r.lineItems.map((li) => {
                 const claimLimit = getClaimLimit(li.quantity);
                 if (claimLimit <= 1) {
-                  return { ...li, claimedBy: [participants[0]] };
+                  return { ...li, claimedBy: [...participants] };
                 }
                 const claims: string[] = [];
                 for (let i = 0; i < claimLimit; i += 1) {

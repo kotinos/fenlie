@@ -1,5 +1,18 @@
 import type { Receipt, Session, LineItem } from "./store";
 
+function getItemQuantity(item: LineItem): number {
+  const qty = Number(item.quantity);
+  return Number.isFinite(qty) && qty > 0 ? qty : 1;
+}
+
+function getClaimedQtyForPerson(item: LineItem, personName: string): number {
+  return item.claimedBy.reduce((count, name) => (name === personName ? count + 1 : count), 0);
+}
+
+function getTotalClaimedQty(item: LineItem): number {
+  return item.claimedBy.length;
+}
+
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
@@ -71,12 +84,15 @@ export function calculatePersonReceiptTotal(
   receipt: Receipt,
   personName: string
 ): PersonReceiptTotal {
-  // Sum of the person's share of each claimed item
+  // Sum of the person's share of each claimed item quantity.
   const itemTotal = receipt.lineItems.reduce((sum, item) => {
-    if (!item.claimedBy.includes(personName) || item.claimedBy.length === 0) {
+    const itemQty = getItemQuantity(item);
+    const claimedQty = getClaimedQtyForPerson(item, personName);
+    if (claimedQty <= 0) {
       return sum;
     }
-    return sum + item.totalPrice / item.claimedBy.length;
+
+    return sum + (claimedQty / itemQty) * item.totalPrice;
   }, 0);
 
   // Proportional share ratio (guard against division by zero)
@@ -215,7 +231,9 @@ export function getUnclaimedItems(session: Session): UnclaimedItem[] {
 
   for (const receipt of session.receipts) {
     for (const item of receipt.lineItems) {
-      if (item.claimedBy.length === 0) {
+      const itemQty = getItemQuantity(item);
+      const claimedQty = getTotalClaimedQty(item);
+      if (claimedQty < itemQty) {
         result.push({
           receiptId: receipt.id,
           receiptName: receipt.restaurantName,

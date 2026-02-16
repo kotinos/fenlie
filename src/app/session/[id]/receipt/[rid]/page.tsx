@@ -8,6 +8,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter } from "next/navigation";
 import {
   Check,
@@ -41,6 +42,48 @@ import {
 import type { LineItem, Receipt, SharedCosts } from "@/lib/types";
 
 type ToastState = { message: string; tone?: "default" | "warn" };
+
+function getClaimCounts(claimedBy: string[]): Record<string, number> {
+  return claimedBy.reduce<Record<string, number>>((acc, person) => {
+    acc[person] = (acc[person] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+function getItemClaimLimit(quantity: number): number {
+  if (!Number.isFinite(quantity) || quantity <= 0) return 1;
+  if (Number.isInteger(quantity) && quantity > 1) return Math.trunc(quantity);
+  return 1;
+}
+
+function getClaimSummaryForItem(item: LineItem): {
+  totalQty: number;
+  claimedQty: number;
+  remainingQty: number;
+  claimCounts: Record<string, number>;
+} {
+  const totalQty = getItemClaimLimit(item.quantity);
+  const claimCounts = getClaimCounts(item.claimedBy);
+  const claimedQty = Math.min(item.claimedBy.length, totalQty);
+  return {
+    totalQty,
+    claimedQty,
+    remainingQty: Math.max(0, totalQty - claimedQty),
+    claimCounts,
+  };
+}
+
+function getClaimedQtyForPerson(item: LineItem, participantName: string): number {
+  return getClaimSummaryForItem(item).claimCounts[participantName] ?? 0;
+}
+
+function formatClaimUnits(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function getInitial(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || "?";
+}
 
 function Toast({ data }: { data: ToastState | null }) {
   if (!data) return null;
@@ -77,19 +120,38 @@ function OverflowMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 224;
+    const left = Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8));
+    setPosition({ top: rect.bottom + 6, left });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent | TouchEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      const clickedTrigger = triggerRef.current?.contains(target);
+      const clickedMenu = ref.current?.contains(target);
+      if (!clickedTrigger && !clickedMenu) setOpen(false);
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("touchstart", close);
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("touchstart", close);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
     };
-  }, [open]);
+  }, [open, updateMenuPosition]);
 
   const Item = ({
     label,
@@ -118,45 +180,56 @@ function OverflowMenu({
   );
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full hover:bg-accent"
       >
         <MoreVertical className="h-5 w-5" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-2 duration-150">
-          {hasImage && (
+        createPortal(
+          <div
+            ref={ref}
+            className="fixed z-[70] w-56 rounded-xl border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-2 duration-150"
+            style={{
+              top: position?.top ?? -9999,
+              left: position?.left ?? -9999,
+            }}
+          >
+            {hasImage && (
+              <Item
+                label="View Photo"
+                onClick={onViewPhoto}
+                icon={<ImageIcon className="h-4 w-4" />}
+              />
+            )}
             <Item
-              label="View Photo"
-              onClick={onViewPhoto}
-              icon={<ImageIcon className="h-4 w-4" />}
+              label="Split All Equally"
+              onClick={onSplitAll}
+              icon={<SplitSquareHorizontal className="h-4 w-4" />}
             />
-          )}
-          <Item
-            label="Split All Equally"
-            onClick={onSplitAll}
-            icon={<SplitSquareHorizontal className="h-4 w-4" />}
-          />
-          <Item
-            label="Claim All for Me"
-            onClick={onClaimAllMine}
-            icon={<Check className="h-4 w-4" />}
-          />
-          <Item
-            label="Clear All Claims"
-            onClick={onClearAll}
-            icon={<Eraser className="h-4 w-4" />}
-          />
-          <div className="my-1 border-t border-border" />
-          <Item
-            label="Delete Receipt"
-            danger
-            onClick={onDeleteReceipt}
-            icon={<Trash2 className="h-4 w-4" />}
-          />
-        </div>
+            <Item
+              label="Claim All for Me"
+              onClick={onClaimAllMine}
+              icon={<Check className="h-4 w-4" />}
+            />
+            <Item
+              label="Clear All Claims"
+              onClick={onClearAll}
+              icon={<Eraser className="h-4 w-4" />}
+            />
+            <div className="my-1 border-t border-border" />
+            <Item
+              label="Delete Receipt"
+              danger
+              onClick={onDeleteReceipt}
+              icon={<Trash2 className="h-4 w-4" />}
+            />
+          </div>,
+          document.body
+        )
       )}
     </div>
   );
@@ -232,24 +305,32 @@ function EditItemDrawer({
   open,
   title,
   item,
+  participants,
+  participantColors,
+  showClaims,
   onOpenChange,
   onSave,
 }: {
   open: boolean;
   title: string;
   item: Partial<LineItem> | null;
+  participants: string[];
+  participantColors: Record<string, string>;
+  showClaims: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (data: {
     description: string;
     quantity: number;
     unitPrice: number;
     totalPrice: number;
+    claimedBy: string[];
   }) => void;
 }) {
   const [description, setDescription] = useState("");
   const [qty, setQty] = useState("1");
   const [unitPrice, setUnitPrice] = useState("");
   const [totalPrice, setTotalPrice] = useState("");
+  const [claimedByDraft, setClaimedByDraft] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -257,6 +338,7 @@ function EditItemDrawer({
     setQty(String(item?.quantity ?? 1));
     setUnitPrice(item?.unitPrice != null ? String(item.unitPrice) : "");
     setTotalPrice(item?.totalPrice != null ? String(item.totalPrice) : "");
+    setClaimedByDraft(item?.claimedBy ? [...item.claimedBy] : []);
   }, [open, item]);
 
   const recalc = useCallback((qStr: string, uStr: string) => {
@@ -274,9 +356,78 @@ function EditItemDrawer({
       quantity: parsedQty,
       unitPrice: parsedUnit,
       totalPrice: parsedTotal,
+      claimedBy: claimedByDraft,
     });
     onOpenChange(false);
-  }, [description, onOpenChange, onSave, qty, totalPrice, unitPrice]);
+  }, [claimedByDraft, description, onOpenChange, onSave, qty, totalPrice, unitPrice]);
+
+  const parsedQty = Number.parseFloat(qty) || 1;
+  const hasIntegerMultiQty = Number.isInteger(parsedQty) && parsedQty > 1;
+  const claimCounts = useMemo(() => getClaimCounts(claimedByDraft), [claimedByDraft]);
+  const totalAssignedUnits = useMemo(
+    () => Object.values(claimCounts).reduce((sum, count) => sum + count, 0),
+    [claimCounts]
+  );
+  const claimerNames = useMemo(() => Object.keys(claimCounts), [claimCounts]);
+
+  const toggleParticipantClaim = useCallback(
+    (person: string) => {
+      const currentCount = claimCounts[person] ?? 0;
+      if (currentCount > 0) {
+        setClaimedByDraft((prev) => prev.filter((name) => name !== person));
+        return;
+      }
+
+      if (!hasIntegerMultiQty) {
+        setClaimedByDraft((prev) => [...prev, person]);
+        return;
+      }
+
+      const maxUnits = Math.max(0, Math.trunc(parsedQty) - totalAssignedUnits);
+      if (maxUnits <= 0) {
+        window.alert("All quantity has already been assigned. Unclaim someone first.");
+        return;
+      }
+
+      const response = window.prompt(
+        `How many units to assign to ${person}? (1-${maxUnits})`,
+        "1"
+      );
+      if (response == null) return;
+      const amount = Number.parseInt(response.trim(), 10);
+      if (!Number.isInteger(amount) || amount < 1 || amount > maxUnits) {
+        window.alert(`Enter a whole number between 1 and ${maxUnits}.`);
+        return;
+      }
+
+      setClaimedByDraft((prev) => [...prev, ...Array.from({ length: amount }, () => person)]);
+    },
+    [claimCounts, hasIntegerMultiQty, parsedQty, totalAssignedUnits]
+  );
+
+  const handleEqualSplit = useCallback(() => {
+    if (participants.length === 0) return;
+    if (!hasIntegerMultiQty) {
+      setClaimedByDraft([...participants]);
+      return;
+    }
+
+    const wholeQty = Math.max(1, Math.trunc(parsedQty));
+    const nextClaims: string[] = [];
+
+    if (wholeQty >= participants.length) {
+      const base = Math.floor(wholeQty / participants.length);
+      const remainder = wholeQty % participants.length;
+      participants.forEach((person, index) => {
+        const count = base + (index < remainder ? 1 : 0);
+        for (let i = 0; i < count; i += 1) nextClaims.push(person);
+      });
+    } else {
+      participants.forEach((person) => nextClaims.push(person));
+    }
+
+    setClaimedByDraft(nextClaims);
+  }, [hasIntegerMultiQty, parsedQty, participants]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
@@ -333,9 +484,227 @@ function EditItemDrawer({
                 />
               </div>
             </div>
+            {showClaims && (
+              <section className="space-y-4 rounded-xl border border-border p-3">
+                <h4 className="text-sm font-semibold">Claims</h4>
+
+                <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+                  <p className="text-xs font-medium text-muted-foreground">Current</p>
+                  {claimerNames.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No claims yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {claimerNames.map((person) => {
+                          const count = claimCounts[person] ?? 0;
+                          return (
+                            <span
+                              key={person}
+                              className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-2.5 py-1 text-sm"
+                            >
+                              <span
+                                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+                                style={{ backgroundColor: participantColors[person] ?? "#71717a" }}
+                              >
+                                {getInitial(person)}
+                              </span>
+                              <span>
+                                {person} ({formatClaimUnits(count)})
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {hasIntegerMultiQty
+                          ? `${Math.min(totalAssignedUnits, Math.trunc(parsedQty))}/${Math.trunc(parsedQty)} claimed`
+                          : `${claimerNames.length} claiming`}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Assign to</p>
+                  <div className="flex flex-wrap gap-2">
+                    {participants.map((person) => {
+                      const active = (claimCounts[person] ?? 0) > 0;
+                      const color = participantColors[person] ?? "#71717a";
+                      return (
+                        <button
+                          key={person}
+                          type="button"
+                          onClick={() => toggleParticipantClaim(person)}
+                          className={[
+                            "inline-flex min-h-[40px] items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors",
+                            active
+                              ? "text-white shadow-sm"
+                              : "border border-border bg-background text-muted-foreground hover:text-foreground",
+                          ].join(" ")}
+                          style={active ? { backgroundColor: color } : undefined}
+                        >
+                          <span
+                            className={[
+                              "inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold",
+                              active ? "bg-white/20 text-white" : "text-white",
+                            ].join(" ")}
+                            style={active ? undefined : { backgroundColor: color }}
+                          >
+                            {getInitial(person)}
+                          </span>
+                          {person}
+                          {active && <Check className="h-3.5 w-3.5" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button type="button" onClick={handleEqualSplit}>
+                    Equal Split
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                    onClick={() => setClaimedByDraft([])}
+                  >
+                    Deselect All
+                  </Button>
+                </div>
+              </section>
+            )}
             <Button className="h-12 w-full text-base font-semibold" onClick={save}>
               Save
             </Button>
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
+function ClaimQuantityDrawer({
+  open,
+  itemName,
+  participantName,
+  currentQty,
+  maxQty,
+  totalQty,
+  claimCounts,
+  participantColors,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  itemName: string;
+  participantName: string;
+  currentQty: number;
+  maxQty: number;
+  totalQty: number;
+  claimCounts: Record<string, number>;
+  participantColors: Record<string, string>;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (quantity: number) => void;
+}) {
+  const [draftQty, setDraftQty] = useState("1");
+  const claimedQty = Object.values(claimCounts).reduce((sum, count) => sum + count, 0);
+  const availableFromOthers = Math.max(0, totalQty - (claimedQty - currentQty));
+  const fullyClaimedByOthers = availableFromOthers === 0 && currentQty === 0;
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftQty(String(Math.min(Math.max(currentQty || 1, 1), Math.max(maxQty, 1))));
+  }, [currentQty, maxQty, open]);
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent>
+        <div className="mx-auto w-full max-w-lg px-4 pb-8">
+          <DrawerHeader className="px-0">
+            <DrawerTitle>How many {itemName} do you want to claim?</DrawerTitle>
+            <DrawerDescription>
+              {fullyClaimedByOthers
+                ? "This item is fully claimed by other participants."
+                : `${availableFromOthers} of ${totalQty} available right now`}
+            </DrawerDescription>
+          </DrawerHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border bg-muted/30 p-3">
+              <p className="text-xs font-medium text-muted-foreground">Current claims</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Object.entries(claimCounts).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No claims yet</p>
+                ) : (
+                  Object.entries(claimCounts).map(([person, qty]) => (
+                    <span
+                      key={person}
+                      className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-2.5 py-1 text-sm"
+                    >
+                      <span
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+                        style={{ backgroundColor: participantColors[person] ?? "#71717a" }}
+                      >
+                        {getInitial(person)}
+                      </span>
+                      {person} ({qty})
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Your quantity ({participantName})</label>
+              <Input
+                inputMode="numeric"
+                value={draftQty}
+                onChange={(e) => {
+                  const value = e.target.value.replace(/[^\d]/g, "");
+                  setDraftQty(value);
+                }}
+                className="h-12"
+              />
+              <p className="text-xs text-muted-foreground">
+                Min 1, max {maxQty}.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  onConfirm(0);
+                  onOpenChange(false);
+                }}
+                disabled={currentQty === 0}
+              >
+                Unclaim
+              </Button>
+              <Button
+                type="button"
+                disabled={fullyClaimedByOthers}
+                onClick={() => {
+                  const parsed = Number.parseInt(draftQty, 10);
+                  const safeQty =
+                    maxQty <= 0
+                      ? 0
+                      : Number.isFinite(parsed)
+                        ? Math.max(1, Math.min(parsed, maxQty))
+                        : Math.max(1, Math.min(currentQty || 1, maxQty));
+                  onConfirm(safeQty);
+                  onOpenChange(false);
+                }}
+              >
+                Claim
+              </Button>
+            </div>
           </div>
         </div>
       </DrawerContent>
@@ -482,19 +851,32 @@ function SummaryPanel({
   participants,
   participantColors,
   currentUser,
+  payer,
+  onSelectPayer,
 }: {
   receipt: Receipt;
   participants: string[];
   participantColors: Record<string, string>;
   currentUser: string;
+  payer: string;
+  onSelectPayer: (name: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [confetti, setConfetti] = useState(false);
+  const [payerPickerOpen, setPayerPickerOpen] = useState(false);
   const pointerStartY = useRef<number | null>(null);
 
-  const claimedCount = receipt.lineItems.filter((i) => i.claimedBy.length > 0).length;
-  const totalItems = receipt.lineItems.length;
-  const allClaimed = totalItems > 0 && claimedCount === totalItems;
+  const totalUnits = receipt.lineItems.reduce(
+    (sum, item) => sum + getClaimSummaryForItem(item).totalQty,
+    0
+  );
+  const claimedUnits = receipt.lineItems.reduce(
+    (sum, item) => sum + getClaimSummaryForItem(item).claimedQty,
+    0
+  );
+  const allClaimed = totalUnits > 0 && claimedUnits === totalUnits;
+  const claimProgress = totalUnits > 0 ? (claimedUnits / totalUnits) * 100 : 0;
+  const hasPayer = Boolean(payer);
 
   const byPerson = useMemo(
     () =>
@@ -507,7 +889,12 @@ function SummaryPanel({
   const unclaimedValue = useMemo(
     () =>
       receipt.lineItems.reduce(
-        (sum, item) => (item.claimedBy.length === 0 ? sum + item.totalPrice : sum),
+        (sum, item) => {
+          const { totalQty, claimedQty } = getClaimSummaryForItem(item);
+          const remainingQty = Math.max(0, totalQty - claimedQty);
+          if (remainingQty === 0) return sum;
+          return sum + (remainingQty / totalQty) * item.totalPrice;
+        },
         0
       ),
     [receipt.lineItems]
@@ -519,18 +906,6 @@ function SummaryPanel({
     const t = setTimeout(() => setConfetti(false), 900);
     return () => clearTimeout(t);
   }, [allClaimed]);
-
-  const segmentTotals = useMemo(() => {
-    const counts = participants.map((person) => ({
-      person,
-      count: receipt.lineItems.filter((i) => i.claimedBy.includes(person)).length,
-    }));
-    const all = counts.reduce((s, x) => s + x.count, 0);
-    return counts.map((c) => ({
-      ...c,
-      percent: all > 0 ? (c.count / all) * 100 : 0,
-    }));
-  }, [participants, receipt.lineItems]);
 
   const handleDragStart = (e: PointerEvent<HTMLButtonElement>) => {
     pointerStartY.current = e.clientY;
@@ -611,45 +986,111 @@ function SummaryPanel({
             </div>
           )}
 
-          <button
-            onClick={() => setExpanded((v) => !v)}
+          <div
             className={[
-              "w-full border-t border-border px-4 py-3 text-left backdrop-blur-sm transition-colors lg:rounded-2xl lg:border",
-              allClaimed ? "bg-emerald-500 text-white" : "bg-background/95",
+              "w-full rounded-t-xl border border-border px-4 py-3 shadow-[0_-6px_20px_rgba(15,23,42,0.08)] backdrop-blur-sm transition-colors lg:rounded-2xl",
+              !hasPayer
+                ? "bg-slate-100 text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+                : allClaimed
+                  ? "bg-emerald-500 text-white"
+                  : "bg-amber-400/95 text-amber-950 dark:bg-amber-900/70 dark:text-amber-100",
             ].join(" ")}
           >
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="mb-2 flex h-2 overflow-hidden rounded-full bg-black/10">
-                  {segmentTotals.map((segment) => (
+            <div className="flex items-center justify-between gap-3 pb-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPayerPickerOpen(true);
+                }}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left"
+                aria-label="Set who paid"
+              >
+                {hasPayer ? (
+                  <>
                     <span
-                      key={segment.person}
-                      className="h-full transition-all duration-300"
-                      style={{
-                        width: `${segment.percent}%`,
-                        backgroundColor: participantColors[segment.person] ?? "#71717a",
-                      }}
-                    />
-                  ))}
-                </div>
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
+                      style={{ backgroundColor: participantColors[payer] ?? "#71717a" }}
+                    >
+                      {payer.slice(0, 1).toUpperCase()}
+                    </span>
+                    <p className="truncate text-sm font-semibold">💳 Paid by {payer}</p>
+                  </>
+                ) : (
+                  <p className="truncate text-sm font-semibold">💳 No one assigned - Tap to set who paid</p>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="flex items-center gap-2 rounded-md px-1 py-1"
+                aria-label={expanded ? "Collapse claim summary" : "Expand claim summary"}
+              >
                 <p className="text-sm font-semibold">
-                  {allClaimed
-                    ? "All claimed ✓"
-                    : `${claimedCount}/${totalItems} claimed`}
+                  {allClaimed ? "All items claimed ✓" : `${claimedUnits}/${totalUnits} claimed`}
                 </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold tabular-nums">${money(receipt.total)}</span>
                 {expanded ? (
                   <ChevronDown className="h-4 w-4" />
                 ) : (
                   <ChevronUp className="h-4 w-4" />
                 )}
-              </div>
+              </button>
             </div>
-          </button>
+            <div className="space-y-1">
+              <div className="h-2 overflow-hidden rounded-full bg-black/15 dark:bg-white/20">
+                <div
+                  className="h-full rounded-full bg-current/70 transition-[width] duration-300"
+                  style={{ width: `${claimProgress}%` }}
+                />
+              </div>
+              <p className="text-right text-sm font-semibold tabular-nums">${money(receipt.total)} total</p>
+            </div>
+          </div>
         </div>
       </div>
+
+      <Drawer open={payerPickerOpen} onOpenChange={setPayerPickerOpen}>
+        <DrawerContent>
+          <div className="mx-auto w-full max-w-lg px-4 pb-8">
+            <DrawerHeader className="px-0">
+              <DrawerTitle>Who paid this receipt?</DrawerTitle>
+              <DrawerDescription>
+                Select the payer so everyone&apos;s claimed amounts are owed to them.
+              </DrawerDescription>
+            </DrawerHeader>
+            <div className="space-y-2">
+              {participants.map((person) => {
+                const selected = payer === person;
+                return (
+                  <button
+                    key={person}
+                    type="button"
+                    onClick={() => {
+                      onSelectPayer(person);
+                      setPayerPickerOpen(false);
+                    }}
+                    className={[
+                      "flex min-h-[52px] w-full items-center justify-between rounded-xl border px-3 py-2 text-left",
+                      selected ? "border-primary bg-primary/5" : "border-border bg-background",
+                    ].join(" ")}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
+                        style={{ backgroundColor: participantColors[person] ?? "#71717a" }}
+                      >
+                        {person.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="truncate font-medium">{person}</span>
+                    </span>
+                    {selected ? <Check className="h-4 w-4 text-primary" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }
@@ -690,6 +1131,10 @@ export default function ReceiptDetailPage() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingIds, setDeletingIds] = useState<Record<string, true>>({});
   const [currentUser, setCurrentUser] = useState("");
+  const [claimDrawerState, setClaimDrawerState] = useState<{
+    itemId: string;
+    participantName: string;
+  } | null>(null);
   const [sortBy, setSortBy] = useState<"description" | "price">("description");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const localPayerChangeRef = useRef(false);
@@ -837,14 +1282,30 @@ export default function ReceiptDetailPage() {
   const onToggleClaim = useCallback(
     (item: LineItem, person: string) => {
       if (!receipt) return;
-      const has = item.claimedBy.includes(person);
-      if (has) {
-        call("unclaimItem", receipt.id, item.id, person);
-      } else {
-        call("claimItem", receipt.id, item.id, person);
+      const { totalQty, remainingQty } = getClaimSummaryForItem(item);
+      const currentQty = getClaimedQtyForPerson(item, person);
+
+      if (totalQty === 1) {
+        if (currentQty > 0) {
+          call("setItemClaimQuantity", receipt.id, item.id, person, 0);
+          return;
+        }
+        if (remainingQty <= 0) {
+          showToast("Fully claimed", "warn");
+          return;
+        }
+        call("setItemClaimQuantity", receipt.id, item.id, person, 1);
+        return;
       }
+
+      if (remainingQty <= 0 && currentQty === 0) {
+        showToast("Fully claimed", "warn");
+        return;
+      }
+
+      setClaimDrawerState({ itemId: item.id, participantName: person });
     },
-    [call, receipt]
+    [call, receipt, showToast]
   );
 
   const openEditor = useCallback(
@@ -873,9 +1334,14 @@ export default function ReceiptDetailPage() {
   );
 
   const saveEdit = useCallback(
-    (data: { description: string; quantity: number; unitPrice: number; totalPrice: number }) => {
+    (data: {
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+      claimedBy: string[];
+    }) => {
       if (!editingItem || !receipt) return;
-      call("updateLineItem", editingItem.id, { ...data, isEdited: true });
       call("updateLineItem", receipt.id, editingItem.id, { ...data, isEdited: true });
       showToast("Updated");
       announce("Item updated");
@@ -884,9 +1350,15 @@ export default function ReceiptDetailPage() {
   );
 
   const saveNew = useCallback(
-    (data: { description: string; quantity: number; unitPrice: number; totalPrice: number }) => {
+    (data: {
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+      claimedBy: string[];
+    }) => {
       if (!receipt) return;
-      call("addLineItem", receipt.id, { ...data, claimedBy: [], isEdited: false });
+      call("addLineItem", receipt.id, { ...data, isEdited: false });
       showToast("Item added");
       announce("Item added");
     },
@@ -927,6 +1399,49 @@ export default function ReceiptDetailPage() {
     });
     return items;
   }, [receipt, sortBy, sortDirection]);
+
+  const hasSplittableItems = useMemo(
+    () =>
+      receipt?.lineItems.some(
+        (item) => Number.isInteger(item.quantity) && item.quantity > 1
+      ) ?? false,
+    [receipt]
+  );
+  const hasAnyClaims = useMemo(
+    () => receipt?.lineItems.some((item) => item.claimedBy.length > 0) ?? false,
+    [receipt]
+  );
+  const claimDrawerItem = useMemo(() => {
+    if (!claimDrawerState) return null;
+    return receipt?.lineItems.find((item) => item.id === claimDrawerState.itemId) ?? null;
+  }, [claimDrawerState, receipt?.lineItems]);
+  const claimDrawerSummary = useMemo(
+    () => (claimDrawerItem ? getClaimSummaryForItem(claimDrawerItem) : null),
+    [claimDrawerItem]
+  );
+  const claimDrawerCurrentQty = useMemo(() => {
+    if (!claimDrawerItem || !claimDrawerState) return 0;
+    return claimDrawerSummary?.claimCounts[claimDrawerState.participantName] ?? 0;
+  }, [claimDrawerItem, claimDrawerState, claimDrawerSummary]);
+  const claimDrawerMaxQty = useMemo(() => {
+    if (!claimDrawerSummary || !claimDrawerState) return 0;
+    const ownQty = claimDrawerSummary.claimCounts[claimDrawerState.participantName] ?? 0;
+    const othersQty = claimDrawerSummary.claimedQty - ownQty;
+    return Math.max(0, claimDrawerSummary.totalQty - othersQty);
+  }, [claimDrawerState, claimDrawerSummary]);
+
+  const onSplitAllToSingleQuantity = useCallback(() => {
+    if (!receipt || !hasSplittableItems) return;
+    if (hasAnyClaims) {
+      const confirmed = window.confirm(
+        "This will reset all existing claims. Participants will need to re-claim individual items. Continue?"
+      );
+      if (!confirmed) return;
+    }
+    call("splitAllItemsToSingleQuantity", receipt.id, hasAnyClaims);
+    showToast("All splittable items converted to qty 1");
+    announce("Items split to quantity 1");
+  }, [call, hasAnyClaims, hasSplittableItems, receipt, showToast]);
 
   if (!session || !receipt) {
     return (
@@ -992,9 +1507,29 @@ export default function ReceiptDetailPage() {
       <PageContainer wide>
         <div className="flex flex-col lg:flex-row lg:gap-8 lg:pt-4">
           <main className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-40 pt-4 lg:pb-6 lg:pt-0">
+            <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card p-3 md:p-4">
+              <div>
+                <h3 className="text-sm font-semibold">Receipt Items</h3>
+                <p className="text-xs text-muted-foreground">
+                  Split multi-quantity rows into individual items.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={onSplitAllToSingleQuantity}
+                disabled={!hasSplittableItems}
+                title={!hasSplittableItems ? "All items already have qty 1" : undefined}
+                className="h-10"
+              >
+                <SplitSquareHorizontal className="mr-2 h-4 w-4" />
+                Split All to 1
+              </Button>
+            </section>
+
             <div className="space-y-3 md:hidden">
               {receipt.lineItems.map((item) => {
-                const unclaimed = item.claimedBy.length === 0;
+                const claimSummary = getClaimSummaryForItem(item);
+                const unclaimed = claimSummary.claimedQty === 0;
                 const editingBy = editingMap[item.id];
                 const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
                 const myEditing = editingBy === currentUser;
@@ -1045,7 +1580,8 @@ export default function ReceiptDetailPage() {
 
                     <div className="mt-3 flex flex-wrap gap-2">
                       {session.participants.map((person) => {
-                        const claimed = item.claimedBy.includes(person);
+                        const personQty = claimSummary.claimCounts[person] ?? 0;
+                        const claimed = personQty > 0;
                         const mine = claimed && person === currentUser;
                         const color = session.participantColors[person] ?? "#71717a";
                         return (
@@ -1069,12 +1605,26 @@ export default function ReceiptDetailPage() {
                             }
                           >
                             {person}
+                            {personQty > 0 ? ` (${personQty})` : ""}
                           </button>
                         );
                       })}
                     </div>
 
-                    {unclaimed && currentUser && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        {claimSummary.claimedQty}/{claimSummary.totalQty} claimed
+                      </p>
+                      {Object.entries(claimSummary.claimCounts).length > 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          {Object.entries(claimSummary.claimCounts)
+                            .map(([person, qty]) => `${person} (${qty})`)
+                            .join(", ")}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    {unclaimed && currentUser && claimSummary.remainingQty > 0 && (
                       <button
                         onClick={() => onToggleClaim(item, currentUser)}
                         className="mt-2 text-sm font-medium text-amber-700 underline underline-offset-2 dark:text-amber-300"
@@ -1169,7 +1719,11 @@ export default function ReceiptDetailPage() {
                 </thead>
                 <tbody>
                   {sortedLineItems.map((item) => {
-                    const isUnclaimed = item.claimedBy.length === 0;
+                    const claimSummary = getClaimSummaryForItem(item);
+                    const isUnclaimed = claimSummary.claimedQty === 0;
+                    const currentUserQty = currentUser
+                      ? claimSummary.claimCounts[currentUser] ?? 0
+                      : 0;
                     const editingBy = editingMap[item.id];
                     const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
                     return (
@@ -1191,20 +1745,28 @@ export default function ReceiptDetailPage() {
                         <td className="px-4 py-3 tabular-nums">${money(item.totalPrice)}</td>
                         <td className="px-4 py-3">
                           {isUnclaimed ? (
-                            <span className="text-amber-700 dark:text-amber-300">Unclaimed</span>
+                            <span className="text-amber-700 dark:text-amber-300">
+                              Unclaimed (0/{claimSummary.totalQty})
+                            </span>
                           ) : (
-                            <div className="flex flex-wrap gap-1">
-                              {item.claimedBy.map((person) => (
-                                <span
-                                  key={person}
-                                  className="rounded-full px-2 py-0.5 text-xs font-medium text-white"
-                                  style={{
-                                    backgroundColor: session.participantColors[person] ?? "#71717a",
-                                  }}
-                                >
-                                  {person}
-                                </span>
-                              ))}
+                            <div className="space-y-1">
+                              <p className="text-xs text-muted-foreground">
+                                {claimSummary.claimedQty}/{claimSummary.totalQty} claimed
+                              </p>
+                              <div className="flex flex-wrap gap-1">
+                                {Object.entries(claimSummary.claimCounts).map(([person, count]) => (
+                                  <span
+                                    key={person}
+                                    className="rounded-full px-2 py-0.5 text-xs font-medium text-white"
+                                    style={{
+                                      backgroundColor:
+                                        session.participantColors[person] ?? "#71717a",
+                                    }}
+                                  >
+                                    {person} ({count})
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </td>
@@ -1219,7 +1781,13 @@ export default function ReceiptDetailPage() {
                               className="rounded px-2 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
                               disabled={!currentUser || lockedByOther}
                             >
-                              {item.claimedBy.includes(currentUser) ? "Unclaim" : "Claim"}
+                              {claimSummary.totalQty > 1
+                                ? currentUserQty > 0
+                                  ? "Adjust"
+                                  : "Claim"
+                                : currentUserQty > 0
+                                  ? "Unclaim"
+                                  : "Claim"}
                             </button>
                             <button
                               onClick={() => openEditor(item)}
@@ -1276,6 +1844,8 @@ export default function ReceiptDetailPage() {
               participants={session.participants}
               participantColors={session.participantColors}
               currentUser={currentUser}
+              payer={receipt.paidBy}
+              onSelectPayer={onSetPayer}
             />
           </aside>
         </div>
@@ -1287,6 +1857,8 @@ export default function ReceiptDetailPage() {
           participants={session.participants}
           participantColors={session.participantColors}
           currentUser={currentUser}
+          payer={receipt.paidBy}
+          onSelectPayer={onSetPayer}
         />
       </div>
 
@@ -1294,6 +1866,9 @@ export default function ReceiptDetailPage() {
         open={editorOpen}
         title="Edit Item"
         item={editingItem}
+        participants={session.participants}
+        participantColors={session.participantColors}
+        showClaims
         onOpenChange={closeEditor}
         onSave={saveEdit}
       />
@@ -1301,8 +1876,34 @@ export default function ReceiptDetailPage() {
         open={addOpen}
         title="Add Item"
         item={null}
+        participants={session.participants}
+        participantColors={session.participantColors}
+        showClaims={false}
         onOpenChange={setAddOpen}
         onSave={saveNew}
+      />
+      <ClaimQuantityDrawer
+        open={Boolean(claimDrawerState)}
+        itemName={claimDrawerItem?.description ?? "item"}
+        participantName={claimDrawerState?.participantName ?? ""}
+        currentQty={claimDrawerCurrentQty}
+        maxQty={claimDrawerMaxQty}
+        totalQty={claimDrawerSummary?.totalQty ?? 1}
+        claimCounts={claimDrawerSummary?.claimCounts ?? {}}
+        participantColors={session.participantColors}
+        onOpenChange={(open) => {
+          if (!open) setClaimDrawerState(null);
+        }}
+        onConfirm={(quantity) => {
+          if (!claimDrawerState) return;
+          call(
+            "setItemClaimQuantity",
+            receipt.id,
+            claimDrawerState.itemId,
+            claimDrawerState.participantName,
+            quantity
+          );
+        }}
       />
 
       <Drawer open={deleteReceiptOpen} onOpenChange={setDeleteReceiptOpen}>

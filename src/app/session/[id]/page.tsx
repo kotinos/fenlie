@@ -100,6 +100,12 @@ function getReceiptTimestamp(receipt: {
   );
 }
 
+function getItemClaimLimit(quantity: number): number {
+  if (!Number.isFinite(quantity) || quantity <= 0) return 1;
+  if (Number.isInteger(quantity) && quantity > 1) return Math.trunc(quantity);
+  return 1;
+}
+
 function PageSkeleton() {
   return (
     <div className="flex min-h-dvh flex-col">
@@ -233,7 +239,7 @@ function ParticipantsDrawer({
       let count = 0;
       for (const receipt of session.receipts) {
         for (const item of receipt.lineItems) {
-          if (item.claimedBy.includes(person)) count += 1;
+          count += item.claimedBy.reduce((sum, name) => (name === person ? sum + 1 : sum), 0);
         }
       }
       return count;
@@ -332,7 +338,7 @@ function ParticipantsDrawer({
                         Remove {person}?
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Their claims on {claimCount} item
+                        Their claims on {claimCount} unit
                         {claimCount === 1 ? "" : "s"} will be cleared.
                       </p>
                       <div className="mt-3 flex gap-2">
@@ -525,7 +531,7 @@ function ReceiptCard({
     id: string;
     status: string;
     restaurantName: string | null;
-    lineItems: { id: string; claimedBy: string[] }[];
+    lineItems: { id: string; quantity: number; claimedBy: string[] }[];
     total: number;
     paidBy: string;
     date: string | null;
@@ -542,8 +548,12 @@ function ReceiptCard({
   const router = useRouter();
   const statusColor = STATUS_COLORS[receipt.status] ?? "#71717a";
   const itemCount = receipt.lineItems.length;
-  const claimedCount = receipt.lineItems.filter((i) => i.claimedBy.length > 0).length;
-  const pct = itemCount > 0 ? (claimedCount / itemCount) * 100 : 0;
+  const totalQty = receipt.lineItems.reduce((sum, item) => sum + getItemClaimLimit(item.quantity), 0);
+  const claimedCount = receipt.lineItems.reduce(
+    (sum, item) => sum + Math.min(item.claimedBy.length, getItemClaimLimit(item.quantity)),
+    0
+  );
+  const pct = totalQty > 0 ? (claimedCount / totalQty) * 100 : 0;
   const payerColor = participantColors[receipt.paidBy] ?? "#71717a";
 
   return (
@@ -581,7 +591,7 @@ function ReceiptCard({
 
         <div className="mt-2">
           <p className="text-xs text-muted-foreground">
-            {claimedCount}/{itemCount || 0} items claimed
+            {claimedCount}/{totalQty || 0} claimed
           </p>
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
             <div

@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { ServiceWorkerRegistrar } from "@/components/service-worker-registrar";
-import { BottomNav } from "@/components/bottom-nav";
 import { SyncIndicator } from "@/components/sync-indicator";
+import { AppShell } from "@/components/layout/AppShell";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -57,11 +57,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ServiceWorkerRegistrar />
-        <div className="relative mx-auto min-h-dvh max-w-lg pb-[env(safe-area-inset-bottom)]">
-          {children}
-          <SyncIndicator />
-          <BottomNav />
-        </div>
+        <AppShell>{children}</AppShell>
+        <SyncIndicator />
         {/* Screen reader announcement region */}
         <div
           id="aria-live-region"

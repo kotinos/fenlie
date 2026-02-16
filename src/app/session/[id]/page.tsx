@@ -7,31 +7,32 @@ import {
   useRef,
   useEffect,
   useMemo,
-  type ChangeEvent,
-  type DragEvent,
 } from "react";
 import {
   Camera,
   Pencil,
-  Upload,
   Trash2,
-  AlertTriangle,
   ImageIcon,
   Users,
   Plus,
   ChevronRight,
   Share2,
-  X,
 } from "lucide-react";
 import { useRealtimeSession } from "@/hooks/use-realtime-session";
 import { usePresence } from "@/hooks/use-presence";
 import { useSplitCheckStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
-import { compressImage, money } from "@/lib/utils";
+import { money } from "@/lib/utils";
 import { ShareSession } from "@/components/share-session";
 import { PageHeader } from "@/components/page-header";
+import { PageContainer } from "@/components/layout/PageContainer";
+import { CacheStatusIndicator } from "@/components/CacheStatusIndicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ReceiptUploader } from "@/components/receipt/ReceiptUploader";
+import { ReceiptReviewForm } from "@/components/receipt/ReceiptReviewForm";
+import type { GeminiReceiptResponse } from "@/lib/gemini/client";
+import type { LineItem as CacheLineItem, Receipt as CacheReceipt } from "@/lib/cache/db";
 import {
   Drawer,
   DrawerContent,
@@ -46,8 +47,6 @@ const STATUS_COLORS: Record<string, string> = {
   processing: "#f59e0b",
   error: "#ef4444",
 };
-
-const LOADING_MESSAGES = ["Reading...", "Finding items...", "Almost done..."];
 
 function toReceiptId(value: unknown): string {
   if (typeof value === "string") return value;
@@ -140,18 +139,15 @@ function PresenceBar({
   );
 
   return (
-    <section className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-30 border-b border-border/40 bg-background/95 backdrop-blur-lg px-4 py-2 lg:sticky lg:top-[calc(3.5rem+env(safe-area-inset-top,0px))] lg:h-[calc(100dvh-3.5rem)] lg:overflow-y-auto lg:border-r lg:border-b-0 lg:px-3 lg:py-3">
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 lg:flex-col lg:items-stretch lg:overflow-visible">
+    <section className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-30 border-b border-border/40 bg-background/95 px-4 py-2 backdrop-blur-lg">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {session.participants.map((name) => {
           const color = session.participantColors[name] ?? "#71717a";
           const isOnline = onlineSet.has(name);
           const isMe = name === currentUserName;
 
           return (
-            <div
-              key={name}
-              className="animate-in fade-in slide-in-from-right-2 duration-200 lg:flex lg:items-center lg:gap-2"
-            >
+            <div key={name} className="animate-in fade-in slide-in-from-right-2 duration-200">
               <div
                 className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white transition-all ${
                   isOnline ? "" : "grayscale opacity-45"
@@ -164,9 +160,6 @@ function PresenceBar({
                   <span className="absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-background bg-green-500" />
                 )}
               </div>
-              <span className="mt-1 hidden max-w-[10rem] truncate text-xs text-muted-foreground lg:block">
-                {name}
-              </span>
             </div>
           );
         })}
@@ -174,12 +167,9 @@ function PresenceBar({
         <button
           onClick={onManageParticipants}
           aria-label="Manage participants"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary lg:w-full lg:justify-start lg:gap-2 lg:rounded-xl lg:px-3"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
         >
           <Plus className="h-4 w-4" />
-          <span className="hidden text-sm font-medium lg:inline">
-            Participants
-          </span>
         </button>
       </div>
     </section>
@@ -401,350 +391,123 @@ function ScanReceiptDrawer({
 }) {
   const router = useRouter();
   const addReceipt = useSplitCheckStore((s) => s.addReceipt);
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isCompressing, setIsCompressing] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [errorKind, setErrorKind] = useState<"network" | "parse" | null>(null);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [loadingIdx, setLoadingIdx] = useState(0);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const loadingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (!isProcessing) return;
-    setLoadingIdx(0);
-    loadingIntervalRef.current = setInterval(() => {
-      setLoadingIdx((v) => (v + 1) % LOADING_MESSAGES.length);
-    }, 2500);
-    return () => {
-      if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
-      loadingIntervalRef.current = null;
-    };
-  }, [isProcessing]);
-
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
+  const [step, setStep] = useState<"upload" | "review">("upload");
+  const [extractedData, setExtractedData] = useState<GeminiReceiptResponse | null>(
+    null
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const resetState = useCallback(() => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setIsCompressing(false);
-    setIsProcessing(false);
-    setErrorKind(null);
-    setErrorMessage("");
-    setLoadingIdx(0);
-    setIsDragOver(false);
-    setUploadedImageUrl(null);
-  }, [previewUrl]);
+    setStep("upload");
+    setExtractedData(null);
+    setSaveError(null);
+    setIsSaving(false);
+  }, []);
 
-  const handleFile = useCallback(
-    async (file: File) => {
-      setErrorKind(null);
-      setErrorMessage("");
-      let next = file;
-      if (file.size > 10 * 1024 * 1024) {
-        setIsCompressing(true);
-        try {
-          next = await compressImage(file, 2048, 0.8);
-        } catch {
-          setIsCompressing(false);
-          setErrorKind("parse");
-          setErrorMessage(
-            "Couldn't compress this image. Try a clearer photo or enter manually."
-          );
-          return;
-        }
-        setIsCompressing(false);
-      }
-
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setSelectedFile(next);
-      setPreviewUrl(URL.createObjectURL(next));
-    },
-    [previewUrl]
-  );
-
-  const processReceipt = useCallback(async () => {
-    if (!selectedFile) return;
-    setIsProcessing(true);
-    setErrorKind(null);
-    setErrorMessage("");
-
-    const draftReceiptId = crypto.randomUUID();
-    const uploadPath = `receipts/${sessionId}/${draftReceiptId}.jpg`;
-
-    const uploadPromise = supabase.storage
-      .from("receipts")
-      .upload(uploadPath, selectedFile, {
-        upsert: true,
-        contentType: selectedFile.type || "image/jpeg",
-      })
-      .then(({ error }) => {
-        if (error) throw new Error(error.message);
-        return supabase.storage.from("receipts").getPublicUrl(uploadPath).data
-          .publicUrl;
-      });
-
-    const parsePromise = (async () => {
-      const formData = new FormData();
-      formData.append("image", selectedFile);
-      const res = await fetch("/api/parse-receipt", {
-        method: "POST",
-        body: formData,
-      });
-      let payload: unknown = null;
+  const handleConfirmReview = useCallback(
+    async (
+      receipt: Omit<CacheReceipt, "id" | "created_at">,
+      lineItems: Omit<CacheLineItem, "id" | "claimed_by" | "claimed_at">[]
+    ) => {
+      setIsSaving(true);
+      setSaveError(null);
       try {
-        payload = await res.json();
-      } catch {
-        payload = null;
+        const mappedItems = lineItems.map((item) => {
+          const quantity = item.quantity > 0 ? item.quantity : 1;
+          const unitPrice = quantity === 0 ? 0 : item.amount / quantity;
+          return {
+            id: crypto.randomUUID(),
+            description: item.description,
+            quantity,
+            unitPrice,
+            totalPrice: item.amount,
+            claimedBy: [],
+            isEdited: false,
+          };
+        });
+        const subtotal = mappedItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        const total = subtotal + receipt.tax + receipt.tip;
+
+        const created = addReceipt(sessionId, {
+          imageUrl: null,
+          paidBy: "",
+          status: "parsed",
+          lineItems: mappedItems,
+          sharedCosts: {
+            tax: receipt.tax,
+            tip: receipt.tip,
+            fees: 0,
+          },
+          subtotal,
+          total,
+          restaurantName: receipt.store_name || null,
+          date: null,
+        });
+        const receiptId = toReceiptId(created);
+        onToast(`Found ${mappedItems.length} items!`);
+        resetState();
+        onOpenChange(false);
+        if (receiptId) router.push(`/session/${sessionId}/receipt/${receiptId}`);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to save extracted receipt.";
+        setSaveError(message);
+      } finally {
+        setIsSaving(false);
       }
-      if (!res.ok) {
-        const err = (payload as { error?: string } | null)?.error ?? "Parse error";
-        throw new Error(err);
-      }
-      return payload as {
-        restaurant: string | null;
-        date: string | null;
-        items: Array<{
-          description: string;
-          quantity: number;
-          unitPrice: number;
-          totalPrice: number;
-        }>;
-        subtotal: number | null;
-        tax: number | null;
-        tip: number | null;
-        fees: number | null;
-        total: number | null;
-      };
-    })();
-
-    let imageUrl: string | null = null;
-    try {
-      const [uploadedUrl, parsed] = await Promise.all([uploadPromise, parsePromise]);
-      imageUrl = uploadedUrl;
-      setUploadedImageUrl(uploadedUrl);
-
-      const lineItems = parsed.items.map((item) => ({
-        id: crypto.randomUUID(),
-        description: item.description,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        totalPrice: item.totalPrice,
-        claimedBy: [],
-        isEdited: false,
-      }));
-      const subtotal =
-        parsed.subtotal ??
-        lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
-      const total =
-        parsed.total ??
-        subtotal + (parsed.tax ?? 0) + (parsed.tip ?? 0) + (parsed.fees ?? 0);
-
-      const created = addReceipt(sessionId, {
-        imageUrl: uploadedUrl,
-        paidBy: "",
-        status: "parsed",
-        lineItems,
-        sharedCosts: {
-          tax: parsed.tax ?? 0,
-          tip: parsed.tip ?? 0,
-          fees: parsed.fees ?? 0,
-        },
-        subtotal,
-        total,
-        restaurantName: parsed.restaurant ?? null,
-        date: parsed.date ?? null,
-      });
-      const receiptId = toReceiptId(created) || draftReceiptId;
-      onToast(`Found ${lineItems.length} items!`);
-      resetState();
-      onOpenChange(false);
-      router.push(`/session/${sessionId}/receipt/${receiptId}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to process receipt";
-      const isNetwork =
-        /network|failed to fetch|connection/i.test(message) ||
-        (typeof navigator !== "undefined" && !navigator.onLine);
-      setErrorKind(isNetwork ? "network" : "parse");
-      setErrorMessage(
-        isNetwork
-          ? "No connection. You can enter items manually."
-          : "Couldn't read this receipt. Try a clearer photo or enter manually."
-      );
-      if (!imageUrl) {
-        try {
-          imageUrl = await uploadPromise;
-          setUploadedImageUrl(imageUrl);
-        } catch {
-          // best effort
-        }
-      }
-      setIsProcessing(false);
-    }
-  }, [addReceipt, onOpenChange, onToast, resetState, router, selectedFile, sessionId]);
-
-  const handleManualFallback = useCallback(() => {
-    const created = addReceipt(sessionId, {
-      imageUrl: uploadedImageUrl,
-      paidBy: "",
-      status: "manual",
-      lineItems: [],
-      sharedCosts: { tax: 0, tip: 0, fees: 0 },
-      subtotal: 0,
-      total: 0,
-      restaurantName: null,
-      date: null,
-    });
-    const rid = toReceiptId(created);
-    resetState();
-    onOpenChange(false);
-    if (rid) router.push(`/session/${sessionId}/receipt/${rid}`);
-  }, [addReceipt, onOpenChange, resetState, router, sessionId, uploadedImageUrl]);
+    },
+    [addReceipt, onOpenChange, onToast, resetState, router, sessionId]
+  );
 
   return (
     <Drawer
       open={open}
-      dismissible={!isProcessing}
+      dismissible={!isSaving}
       onOpenChange={(value) => {
-        if (isProcessing) return;
+        if (isSaving) return;
         if (!value) resetState();
         onOpenChange(value);
       }}
     >
-      <DrawerContent className="h-[95dvh]">
-        <div className="mx-auto flex w-full max-w-xl flex-1 flex-col overflow-hidden px-4 pb-6">
+      <DrawerContent className="h-dvh md:h-auto md:max-w-4xl">
+        <div className="mx-auto flex w-full max-w-xl flex-1 flex-col overflow-hidden px-4 pb-6 md:max-w-none md:px-6">
           <DrawerHeader className="px-0">
-            <div className="flex items-center justify-between">
-              <DrawerTitle>Scan Receipt</DrawerTitle>
-              <button
-                disabled={isProcessing}
-                onClick={() => onOpenChange(false)}
-                aria-label="Close scan drawer"
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <DrawerTitle>Add Receipt</DrawerTitle>
             <DrawerDescription>
-              Take a photo or upload an image to parse automatically.
+              Capture a photo, extract items, then review before saving.
             </DrawerDescription>
           </DrawerHeader>
+          <div className="flex-1 overflow-y-auto">
+            {saveError ? (
+              <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                {saveError}
+              </div>
+            ) : null}
 
-          <div className="flex flex-1 flex-col items-center justify-center overflow-auto">
-            {isCompressing ? (
-              <div className="text-center">
-                <p className="text-sm font-medium">Compressing...</p>
-              </div>
-            ) : isProcessing ? (
-              <div className="flex w-full max-w-sm flex-col items-center gap-5 py-8">
-                <div className="w-full space-y-3">
-                  <div className="h-6 w-2/3 animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-4/6 animate-pulse rounded bg-muted" />
-                </div>
-                <p className="text-sm font-medium text-muted-foreground">
-                  {LOADING_MESSAGES[loadingIdx]}
-                </p>
-              </div>
-            ) : errorKind ? (
-              <div className="flex w-full max-w-sm flex-col items-center gap-4 py-8 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/10">
-                  <AlertTriangle className="h-7 w-7 text-destructive" />
-                </div>
-                <p className="text-sm text-muted-foreground">{errorMessage}</p>
-                <div className="flex w-full gap-2">
-                  <Button className="h-12 flex-1" onClick={processReceipt}>
-                    Try Again
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-12 flex-1"
-                    onClick={handleManualFallback}
-                  >
-                    Enter Manually
-                  </Button>
-                </div>
-              </div>
-            ) : previewUrl ? (
-              <div className="w-full space-y-4">
-                <div className="max-h-[50vh] overflow-hidden rounded-xl border border-border bg-muted/30">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewUrl}
-                    alt="Receipt preview"
-                    className="h-full w-full object-contain"
-                  />
-                </div>
-                <Button className="h-12 w-full" onClick={processReceipt}>
-                  Process Receipt
-                </Button>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-11 w-full text-sm text-muted-foreground underline underline-offset-4"
-                >
-                  Retake
-                </button>
-              </div>
+            {step === "upload" || !extractedData ? (
+              <ReceiptUploader
+                sessionId={sessionId}
+                onCancel={() => onOpenChange(false)}
+                onExtracted={(data) => {
+                  setExtractedData(data);
+                  setStep("review");
+                }}
+              />
             ) : (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(true);
+              <ReceiptReviewForm
+                extractedData={extractedData}
+                sessionId={sessionId}
+                onBack={() => {
+                  setStep("upload");
+                  setSaveError(null);
                 }}
-                onDragLeave={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(false);
+                onConfirm={(receipt, lineItems) => {
+                  void handleConfirmReview(receipt, lineItems);
                 }}
-                onDrop={(e: DragEvent<HTMLButtonElement>) => {
-                  e.preventDefault();
-                  setIsDragOver(false);
-                  const file = e.dataTransfer.files?.[0];
-                  if (file?.type.startsWith("image/")) void handleFile(file);
-                }}
-                className={`flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-10 transition-colors ${
-                  isDragOver
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40 hover:bg-accent/30"
-                }`}
-              >
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted">
-                  <Upload className="h-8 w-8 text-muted-foreground md:hidden" />
-                  <Camera className="hidden h-8 w-8 text-muted-foreground md:block" />
-                </div>
-                <p className="text-sm font-medium text-muted-foreground md:hidden">
-                  Tap to take a photo
-                </p>
-                <p className="hidden text-sm font-medium text-muted-foreground md:block">
-                  Drag &amp; drop or click to upload
-                </p>
-              </button>
+              />
             )}
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              const file = e.target.files?.[0];
-              if (file) void handleFile(file);
-            }}
-          />
         </div>
       </DrawerContent>
     </Drawer>
@@ -843,6 +606,7 @@ export default function SessionPage() {
 
   const addReceipt = useSplitCheckStore((s) => s.addReceipt);
   const addParticipant = useSplitCheckStore((s) => s.addParticipant);
+  const syncStatus = useSplitCheckStore((s) => s.syncStatus);
 
   const [currentUserName, setCurrentUserName] = useState<string | null>(null);
   const [identityResolved, setIdentityResolved] = useState(false);
@@ -1025,48 +789,126 @@ export default function SessionPage() {
         }
       />
 
-      <div className="lg:grid lg:grid-cols-[220px_minmax(0,1fr)]">
-        <PresenceBar
-          session={session}
-          onlineUsers={onlineUsers}
-          currentUserName={currentUserName ?? ""}
-          onManageParticipants={() => setParticipantsOpen(true)}
-        />
+      <PresenceBar
+        session={session}
+        onlineUsers={onlineUsers}
+        currentUserName={currentUserName ?? ""}
+        onManageParticipants={() => setParticipantsOpen(true)}
+      />
 
-        <main className="flex-1 overflow-y-auto px-4 pb-36 pt-4">
-          {showInviteHint && (
-            <div className="mb-3 rounded-xl border border-primary/25 bg-primary/5 p-3 text-sm text-primary">
-              Invite your friends so they can claim their items!
-            </div>
-          )}
-          {session.receipts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-muted">
-                <ImageIcon className="h-10 w-10 text-muted-foreground" />
+      <PageContainer wide>
+        <div className="flex flex-col lg:flex-row lg:gap-8">
+          <main className="flex-1 overflow-y-auto pb-36 pt-4 md:pb-8">
+            {showInviteHint && (
+              <div className="mb-3 rounded-xl border border-primary/25 bg-primary/5 p-3 text-sm text-primary md:text-base">
+                Invite your friends so they can claim their items!
               </div>
-              <h2 className="text-lg font-semibold">No receipts yet</h2>
-              <p className="mt-1 max-w-[260px] text-sm text-muted-foreground">
-                Scan a receipt or add items manually.
-              </p>
-            </div>
-          ) : (
-            <div className={gridClass}>
-              {session.receipts.map((receipt, idx) => (
-                <ReceiptCard
-                  key={receipt.id}
-                  receipt={receipt}
-                  index={idx}
-                  sessionId={session.id}
-                  participantColors={session.participantColors}
-                  isNew={newReceiptIds.has(receipt.id)}
-                />
-              ))}
-            </div>
-          )}
-        </main>
-      </div>
+            )}
+            <section className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+              <div>
+                <h2 className="text-base font-semibold">Receipts</h2>
+                <p className="text-sm text-muted-foreground">
+                  Upload a receipt photo or add items manually.
+                </p>
+              </div>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                <Button className="h-11 md:min-h-0" onClick={() => setScanOpen(true)}>
+                  <Camera className="mr-2 h-4 w-4" />
+                  Upload Receipt
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 md:min-h-0"
+                  onClick={() => handleManualEntry(null)}
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Manual Entry
+                </Button>
+              </div>
+            </section>
+            {session.receipts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center lg:min-h-[60vh]">
+                <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-muted">
+                  <ImageIcon className="h-10 w-10 text-muted-foreground" />
+                </div>
+                <h2 className="text-lg font-semibold md:text-2xl">No receipts yet</h2>
+                <p className="mt-1 max-w-[260px] text-sm text-muted-foreground md:max-w-xl md:text-base">
+                  Scan a receipt or add items manually.
+                </p>
+              </div>
+            ) : (
+              <div className={gridClass}>
+                {session.receipts.map((receipt, idx) => (
+                  <ReceiptCard
+                    key={receipt.id}
+                    receipt={receipt}
+                    index={idx}
+                    sessionId={session.id}
+                    participantColors={session.participantColors}
+                    isNew={newReceiptIds.has(receipt.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </main>
 
-      <div className="fixed bottom-[calc(64px+env(safe-area-inset-bottom,0px))] left-0 right-0 z-30">
+          <aside className="hidden lg:block lg:w-80 lg:shrink-0 lg:self-start lg:sticky lg:top-6">
+            <div className="space-y-3 rounded-xl border border-border bg-card p-5">
+              <h2 className="text-base font-semibold">Session Sidebar</h2>
+              <p className="text-sm text-muted-foreground">
+                {session.participants.length} participants, {session.receipts.length} receipts
+              </p>
+              <div className="space-y-2">
+                <Button className="h-11 w-full md:min-h-0" onClick={() => setScanOpen(true)}>
+                  <Camera className="mr-2 h-4 w-4" />
+                  Add Receipt
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full md:min-h-0"
+                  onClick={() => handleManualEntry(null)}
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Manual Entry
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full md:min-h-0"
+                  onClick={() => setParticipantsOpen(true)}
+                >
+                  Manage Participants
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full md:min-h-0"
+                  onClick={() => setShareOpen(true)}
+                >
+                  <Share2 className="mr-2 h-4 w-4" />
+                  Share Session
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full md:min-h-0"
+                  onClick={() => router.push(`/session/${session.id}/dashboard`)}
+                >
+                  <Users className="mr-2 h-4 w-4" />
+                  Settlement Dashboard
+                </Button>
+              </div>
+              <div className="border-t border-border pt-3">
+                <CacheStatusIndicator
+                  isRevalidating={syncStatus === "syncing"}
+                  isOffline={false}
+                  isStale={false}
+                  error={syncStatus === "error" ? new Error("Sync failed") : null}
+                />
+              </div>
+            </div>
+          </aside>
+        </div>
+      </PageContainer>
+
+      <div className="fixed bottom-[calc(64px+env(safe-area-inset-bottom,0px))] left-0 right-0 z-30 md:hidden">
         <div className="mx-auto max-w-3xl border-t border-border/50 bg-background/95 px-4 py-3 backdrop-blur-sm">
           <div className="flex gap-2 md:gap-3">
             <Button
@@ -1125,7 +967,7 @@ export default function SessionPage() {
       <button
         onClick={() => router.push(`/session/${session.id}/dashboard`)}
         aria-label="Open settlement dashboard"
-        className="fixed bottom-[calc(140px+env(safe-area-inset-bottom,0px))] right-4 z-20 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:text-foreground lg:right-[max(1rem,calc((100vw-64rem)/2+1rem))]"
+        className="fixed bottom-[calc(140px+env(safe-area-inset-bottom,0px))] right-4 z-20 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:text-foreground md:hidden"
       >
         <Users className="h-4 w-4" />
       </button>

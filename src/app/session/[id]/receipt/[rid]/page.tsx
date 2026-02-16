@@ -28,6 +28,7 @@ import { usePresence } from "@/hooks/use-presence";
 import { calculatePersonReceiptTotal } from "@/lib/calculations";
 import { announce, money } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
+import { PageContainer } from "@/components/layout/PageContainer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -689,6 +690,8 @@ export default function ReceiptDetailPage() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingIds, setDeletingIds] = useState<Record<string, true>>({});
   const [currentUser, setCurrentUser] = useState("");
+  const [sortBy, setSortBy] = useState<"description" | "price">("description");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const localPayerChangeRef = useRef(false);
   const prevItemsRef = useRef<LineItem[]>([]);
   const deleteConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -912,6 +915,19 @@ export default function ReceiptDetailPage() {
     router.push(`/session/${params.id}`);
   }, [call, params.id, receipt, router]);
 
+  const sortedLineItems = useMemo(() => {
+    if (!receipt) return [];
+    const items = [...receipt.lineItems];
+    items.sort((a, b) => {
+      if (sortBy === "price") {
+        return sortDirection === "asc" ? a.totalPrice - b.totalPrice : b.totalPrice - a.totalPrice;
+      }
+      const comparison = a.description.localeCompare(b.description);
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+    return items;
+  }, [receipt, sortBy, sortDirection]);
+
   if (!session || !receipt) {
     return (
       <div className="flex min-h-dvh flex-col">
@@ -973,173 +989,297 @@ export default function ReceiptDetailPage() {
         onSelect={onSetPayer}
       />
 
-      <div className="mx-auto grid w-full max-w-lg flex-1 lg:max-w-6xl lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-4 lg:px-4">
-        <main className="min-h-0 space-y-3 overflow-y-auto px-4 pb-40 pt-4 lg:px-0 lg:pb-6">
-          {receipt.lineItems.map((item) => {
-            const unclaimed = item.claimedBy.length === 0;
-            const editingBy = editingMap[item.id];
-            const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
-            const myEditing = editingBy === currentUser;
-            return (
-              <article
-                key={item.id}
-                className={[
-                  "relative rounded-xl border p-4 transition-all duration-200",
-                  unclaimed
-                    ? "border-l-4 border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20"
-                    : "bg-card",
-                  claimFlashIds[item.id] ? "ring-2 ring-primary/20" : "",
-                  editFlashIds[item.id] ? "bg-amber-100/70 dark:bg-amber-900/20" : "",
-                  newFlashIds[item.id] ? "bg-emerald-100/70 dark:bg-emerald-900/30" : "",
-                  deletingIds[item.id] ? "-translate-x-4 opacity-0" : "",
-                ].join(" ")}
-              >
-                {lockedByOther && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/75 backdrop-blur-[1px]">
-                    <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                      <Lock className="h-4 w-4" />
-                      {editingBy} editing...
-                    </p>
-                  </div>
-                )}
-                {myEditing && (
-                  <div className="absolute right-2 top-2 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">
-                    You are editing
-                  </div>
-                )}
+      <PageContainer wide>
+        <div className="flex flex-col lg:flex-row lg:gap-8 lg:pt-4">
+          <main className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-40 pt-4 lg:pb-6 lg:pt-0">
+            <div className="space-y-3 md:hidden">
+              {receipt.lineItems.map((item) => {
+                const unclaimed = item.claimedBy.length === 0;
+                const editingBy = editingMap[item.id];
+                const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
+                const myEditing = editingBy === currentUser;
+                return (
+                  <article
+                    key={item.id}
+                    className={[
+                      "relative rounded-xl border p-4 transition-all duration-200",
+                      unclaimed
+                        ? "border-l-4 border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20"
+                        : "bg-card",
+                      claimFlashIds[item.id] ? "ring-2 ring-primary/20" : "",
+                      editFlashIds[item.id] ? "bg-amber-100/70 dark:bg-amber-900/20" : "",
+                      newFlashIds[item.id] ? "bg-emerald-100/70 dark:bg-emerald-900/30" : "",
+                      deletingIds[item.id] ? "-translate-x-4 opacity-0" : "",
+                    ].join(" ")}
+                  >
+                    {lockedByOther && (
+                      <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/75 backdrop-blur-sm">
+                        <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                          <Lock className="h-4 w-4" />
+                          {editingBy} editing...
+                        </p>
+                      </div>
+                    )}
+                    {myEditing && (
+                      <div className="absolute right-2 top-2 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">
+                        You are editing
+                      </div>
+                    )}
 
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-base font-semibold">{item.description}</p>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      Qty: {item.quantity} x ${money(item.unitPrice)}
-                      {item.isEdited && (
-                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold">
-                          edited
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                  <p className="shrink-0 text-base font-semibold tabular-nums">
-                    ${money(item.totalPrice)}
-                  </p>
-                </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-base font-semibold">{item.description}</p>
+                        <p className="mt-0.5 text-sm text-muted-foreground">
+                          Qty: {item.quantity} x ${money(item.unitPrice)}
+                          {item.isEdited && (
+                            <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold">
+                              edited
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <p className="shrink-0 text-base font-semibold tabular-nums">
+                        ${money(item.totalPrice)}
+                      </p>
+                    </div>
 
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {session.participants.map((person) => {
-                    const claimed = item.claimedBy.includes(person);
-                    const mine = claimed && person === currentUser;
-                    const color = session.participantColors[person] ?? "#71717a";
-                    return (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {session.participants.map((person) => {
+                        const claimed = item.claimedBy.includes(person);
+                        const mine = claimed && person === currentUser;
+                        const color = session.participantColors[person] ?? "#71717a";
+                        return (
+                          <button
+                            key={person}
+                            onClick={() => onToggleClaim(item, person)}
+                            className={[
+                              "min-h-[44px] rounded-full px-3 py-2 text-sm font-medium transition-all duration-200 active:animate-claim-pop",
+                              claimed ? "text-white" : "border-2 bg-transparent",
+                              mine ? "ring-2 ring-offset-2" : "",
+                            ].join(" ")}
+                            style={
+                              claimed
+                                ? {
+                                    backgroundColor: color,
+                                  }
+                                : {
+                                    borderColor: color,
+                                    color,
+                                  }
+                            }
+                          >
+                            {person}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {unclaimed && currentUser && (
                       <button
-                        key={person}
-                        onClick={() => onToggleClaim(item, person)}
-                        className={[
-                          "min-h-[44px] rounded-full px-3 py-2 text-sm font-medium transition-all duration-200 active:animate-claim-pop",
-                          claimed ? "text-white" : "border-2 bg-transparent",
-                          mine ? "ring-2 ring-offset-2" : "",
-                        ].join(" ")}
-                        style={
-                          claimed
-                            ? {
-                                backgroundColor: color,
-                              }
-                            : {
-                                borderColor: color,
-                                color,
-                              }
-                        }
+                        onClick={() => onToggleClaim(item, currentUser)}
+                        className="mt-2 text-sm font-medium text-amber-700 underline underline-offset-2 dark:text-amber-300"
                       >
-                        {person}
+                        Tap to claim for yourself
                       </button>
+                    )}
+
+                    <div className="mt-2 flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEditor(item)}
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`Edit ${item.description}`}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      {pendingDeleteId === item.id ? (
+                        <div className="flex items-center gap-1 rounded-lg bg-destructive/5 px-1 py-1 animate-in fade-in slide-in-from-right-2 duration-150">
+                          <span className="px-1 text-xs text-muted-foreground">Delete?</span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-xs md:min-h-0"
+                            onClick={() => setPendingDeleteId(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-8 text-xs md:min-h-0"
+                            onClick={() => deleteItem(item.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => requestDeleteItem(item.id)}
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={`Delete ${item.description}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="hidden overflow-hidden rounded-xl border border-border md:block">
+              <table className="w-full text-sm md:text-base">
+                <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (sortBy === "description") {
+                            setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+                            return;
+                          }
+                          setSortBy("description");
+                          setSortDirection("asc");
+                        }}
+                        className="inline-flex items-center gap-1 font-semibold hover:text-foreground"
+                      >
+                        Item Description
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 font-semibold">Qty</th>
+                    <th className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (sortBy === "price") {
+                            setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+                            return;
+                          }
+                          setSortBy("price");
+                          setSortDirection("desc");
+                        }}
+                        className="inline-flex items-center gap-1 font-semibold hover:text-foreground"
+                      >
+                        Price
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 font-semibold">Claimed By</th>
+                    <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedLineItems.map((item) => {
+                    const isUnclaimed = item.claimedBy.length === 0;
+                    const editingBy = editingMap[item.id];
+                    const lockedByOther = Boolean(editingBy && editingBy !== currentUser);
+                    return (
+                      <tr
+                        key={item.id}
+                        className="border-t border-border align-top transition-colors hover:bg-muted/30"
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{item.description}</span>
+                            {item.isEdited ? (
+                              <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                                edited
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 tabular-nums">{item.quantity}</td>
+                        <td className="px-4 py-3 tabular-nums">${money(item.totalPrice)}</td>
+                        <td className="px-4 py-3">
+                          {isUnclaimed ? (
+                            <span className="text-amber-700 dark:text-amber-300">Unclaimed</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {item.claimedBy.map((person) => (
+                                <span
+                                  key={person}
+                                  className="rounded-full px-2 py-0.5 text-xs font-medium text-white"
+                                  style={{
+                                    backgroundColor: session.participantColors[person] ?? "#71717a",
+                                  }}
+                                >
+                                  {person}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!currentUser) return;
+                                onToggleClaim(item, currentUser);
+                              }}
+                              className="rounded px-2 py-1 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                              disabled={!currentUser || lockedByOther}
+                            >
+                              {item.claimedBy.includes(currentUser) ? "Unclaim" : "Claim"}
+                            </button>
+                            <button
+                              onClick={() => openEditor(item)}
+                              className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                              aria-label={`Edit ${item.description}`}
+                              disabled={lockedByOther}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => requestDeleteItem(item.id)}
+                              className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              aria-label={`Delete ${item.description}`}
+                              disabled={lockedByOther}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
-                </div>
-
-                {unclaimed && currentUser && (
-                  <button
-                    onClick={() => onToggleClaim(item, currentUser)}
-                    className="mt-2 text-sm font-medium text-amber-700 underline underline-offset-2 dark:text-amber-300"
-                  >
-                    Tap to claim for yourself
-                  </button>
-                )}
-
-                <div className="mt-2 flex items-center justify-end gap-1">
-                  <button
-                    onClick={() => openEditor(item)}
-                    className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-                    aria-label={`Edit ${item.description}`}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  {pendingDeleteId === item.id ? (
-                    <div className="flex items-center gap-1 rounded-lg bg-destructive/5 px-1 py-1 animate-in fade-in slide-in-from-right-2 duration-150">
-                      <span className="px-1 text-xs text-muted-foreground">Delete?</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={() => setPendingDeleteId(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={() => deleteItem(item.id)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => requestDeleteItem(item.id)}
-                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={`Delete ${item.description}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-
-          {deletedGhosts.map((ghost) => (
-            <div
-              key={ghost.id}
-              className="rounded-xl border border-red-300 bg-red-100/70 px-4 py-3 text-sm text-red-700 animate-out fade-out slide-out-to-left-4 duration-200 dark:bg-red-950/30 dark:text-red-300"
-            >
-              {ghost.description} deleted
+                </tbody>
+              </table>
             </div>
-          ))}
 
-          <button
-            onClick={() => setAddOpen(true)}
-            className="flex min-h-[56px] w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-sm font-semibold text-muted-foreground hover:border-primary/50 hover:text-primary"
-          >
-            <Plus className="h-4 w-4" />
-            Add Item
-          </button>
+            {deletedGhosts.map((ghost) => (
+              <div
+                key={ghost.id}
+                className="rounded-xl border border-red-300 bg-red-100/70 px-4 py-3 text-sm text-red-700 animate-out fade-out slide-out-to-left-4 duration-200 dark:bg-red-950/30 dark:text-red-300"
+              >
+                {ghost.description} deleted
+              </div>
+            ))}
 
-          <SharedCostsSection
-            receiptId={receipt.id}
-            sharedCosts={receipt.sharedCosts}
-            updateSharedCosts={(receiptId, data) => call("updateSharedCosts", receiptId, data)}
-          />
-        </main>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="flex min-h-[56px] w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-sm font-semibold text-muted-foreground hover:border-primary/50 hover:text-primary md:h-14 md:min-h-0"
+            >
+              <Plus className="h-4 w-4" />
+              Add Item
+            </button>
 
-        <aside className="hidden lg:block lg:pb-6">
-          <SummaryPanel
-            receipt={receipt}
-            participants={session.participants}
-            participantColors={session.participantColors}
-            currentUser={currentUser}
-          />
-        </aside>
-      </div>
+            <SharedCostsSection
+              receiptId={receipt.id}
+              sharedCosts={receipt.sharedCosts}
+              updateSharedCosts={(receiptId, data) => call("updateSharedCosts", receiptId, data)}
+            />
+          </main>
+
+          <aside className="hidden lg:block lg:w-80 lg:shrink-0 lg:self-start lg:sticky lg:top-6">
+            <SummaryPanel
+              receipt={receipt}
+              participants={session.participants}
+              participantColors={session.participantColors}
+              currentUser={currentUser}
+            />
+          </aside>
+        </div>
+      </PageContainer>
 
       <div className="lg:hidden">
         <SummaryPanel

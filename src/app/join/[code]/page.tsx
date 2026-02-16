@@ -11,6 +11,7 @@ import {
   type DbParticipant,
 } from "@/lib/store";
 import { PageHeader } from "@/components/page-header";
+import { PageContainer } from "@/components/layout/PageContainer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -272,10 +273,11 @@ export default function JoinPage() {
     <div className="flex min-h-dvh flex-col">
       <PageHeader title="Join Session" />
 
-      <main className="flex-1 px-4 pb-24 pt-4">
-        <div className="mx-auto max-w-lg space-y-6">
+      <main className="flex-1 pb-24 pt-4 md:pb-8">
+        <PageContainer>
+          <div className="mx-auto max-w-lg space-y-6">
           {/* Session info card */}
-          <div className="rounded-xl border border-border bg-card p-6">
+          <div className="rounded-xl border border-border bg-card p-6 md:p-5 lg:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Session</p>
@@ -326,7 +328,7 @@ export default function JoinPage() {
 
           {/* Rejoin prompt (if existing identity found) */}
           {existingIdentity && (
-            <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 md:p-5 lg:p-6">
               <p className="text-sm text-muted-foreground mb-3">
                 You previously joined as{" "}
                 <span className="font-semibold text-foreground">
@@ -352,7 +354,7 @@ export default function JoinPage() {
           )}
 
           {/* Join as new */}
-          <div className="space-y-3">
+          <div className="space-y-3 md:rounded-xl md:border md:border-border md:bg-card md:p-5 lg:p-6">
             {existingIdentity && (
               <p className="text-center text-sm text-muted-foreground">
                 — or join as someone else —
@@ -399,6 +401,7 @@ export default function JoinPage() {
             </Button>
           </div>
         </div>
+        </PageContainer>
       </main>
     </div>
   );

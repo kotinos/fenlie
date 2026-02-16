@@ -18,7 +18,7 @@ export function BottomNav() {
   const currentSessionId = sessionIdMatch?.[1] ?? null;
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40" aria-label="Main navigation">
+    <nav className="fixed inset-x-0 bottom-0 z-40 md:hidden" aria-label="Main navigation">
       <div className="mx-auto max-w-lg">
         <div
           className="flex items-start justify-around border-t border-zinc-200 bg-white/80 backdrop-blur-lg dark:border-zinc-800 dark:bg-zinc-900/80"

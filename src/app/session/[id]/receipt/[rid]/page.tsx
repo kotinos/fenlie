@@ -33,6 +33,16 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Drawer,
   DrawerContent,
   DrawerDescription,
@@ -1164,7 +1174,8 @@ export default function ReceiptDetailPage() {
   const [deletedGhosts, setDeletedGhosts] = useState<
     Array<{ id: string; description: string }>
   >([]);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deleteItemConfirmOpen, setDeleteItemConfirmOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<LineItem | null>(null);
   const [deletingIds, setDeletingIds] = useState<Record<string, true>>({});
   const [currentUser, setCurrentUser] = useState("");
   const [claimDrawerState, setClaimDrawerState] = useState<{
@@ -1175,7 +1186,6 @@ export default function ReceiptDetailPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const localPayerChangeRef = useRef(false);
   const prevItemsRef = useRef<LineItem[]>([]);
-  const deleteConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const userColor = session?.participantColors[currentUser] ?? "#71717a";
   const presenceRaw = usePresence(
@@ -1299,13 +1309,6 @@ export default function ReceiptDetailPage() {
     return () => clearTimeout(t);
   }, [receipt]);
 
-  useEffect(
-    () => () => {
-      if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
-    },
-    []
-  );
-
   const onSetPayer = useCallback(
     (person: string) => {
       if (!receipt) return;
@@ -1397,21 +1400,24 @@ export default function ReceiptDetailPage() {
     [call, receipt, showToast]
   );
 
-  const requestDeleteItem = useCallback((itemId: string) => {
-    setPendingDeleteId(itemId);
-    if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
-    deleteConfirmTimer.current = setTimeout(() => setPendingDeleteId(null), 5000);
+  const requestDeleteItem = useCallback((item: LineItem) => {
+    setItemToDelete(item);
+    setDeleteItemConfirmOpen(true);
   }, []);
 
-  const deleteItem = useCallback(
-    (itemId: string) => {
-      if (!receipt) return;
-      setDeletingIds((s) => ({ ...s, [itemId]: true }));
-      setPendingDeleteId(null);
-      setTimeout(() => call("deleteLineItem", receipt.id, itemId), 200);
-    },
-    [call, receipt]
-  );
+  const handleDeleteItem = useCallback(() => {
+    if (!receipt || !itemToDelete) return;
+    const { id: itemId, description } = itemToDelete;
+    setDeletingIds((s) => ({ ...s, [itemId]: true }));
+    setDeleteItemConfirmOpen(false);
+    setItemToDelete(null);
+    if (editingItem?.id === itemId) {
+      closeEditor(false);
+    }
+    setTimeout(() => call("deleteLineItem", receipt.id, itemId), 200);
+    showToast(`"${description}" deleted`);
+    announce("Item deleted");
+  }, [call, closeEditor, editingItem?.id, itemToDelete, receipt, showToast]);
 
   const deleteReceiptNow = useCallback(() => {
     if (!receipt) return;
@@ -1705,35 +1711,13 @@ export default function ReceiptDetailPage() {
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
-                      {pendingDeleteId === item.id ? (
-                        <div className="flex items-center gap-1 rounded-lg bg-destructive/5 px-1 py-1 animate-in fade-in slide-in-from-right-2 duration-150">
-                          <span className="px-1 text-xs text-muted-foreground">Delete?</span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 text-xs md:min-h-0"
-                            onClick={() => setPendingDeleteId(null)}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="h-8 text-xs md:min-h-0"
-                            onClick={() => deleteItem(item.id)}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => requestDeleteItem(item.id)}
-                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          aria-label={`Delete ${item.description}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => requestDeleteItem(item)}
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={`Delete ${item.description}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
                   </article>
                 );
@@ -1890,7 +1874,7 @@ export default function ReceiptDetailPage() {
                               <Pencil className="h-4 w-4" />
                             </button>
                             <button
-                              onClick={() => requestDeleteItem(item.id)}
+                              onClick={() => requestDeleteItem(item)}
                               className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                               aria-label={`Delete ${item.description}`}
                               disabled={lockedByOther}
@@ -1997,6 +1981,31 @@ export default function ReceiptDetailPage() {
           );
         }}
       />
+      <AlertDialog
+        open={deleteItemConfirmOpen}
+        onOpenChange={(open) => {
+          setDeleteItemConfirmOpen(open);
+          if (!open) setItemToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Item?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`Are you sure you want to delete "${itemToDelete?.description ?? "this item"}"? This will remove all claims on this item. This action cannot be undone.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteItem}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Drawer open={deleteReceiptOpen} onOpenChange={setDeleteReceiptOpen}>
         <DrawerContent>

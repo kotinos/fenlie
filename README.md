@@ -1,36 +1,115 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## SplitCheck
 
-## Getting Started
+SplitCheck is a [Next.js](https://nextjs.org) app built with React, Shadcn UI, and Tailwind CSS.
+Participants claim receipt line items to indicate what they ordered, and costs are split based on those claims.
+## How it works
 
-First, run the development server:
+1. Create or join a shared session.
+2. Upload a receipt image and parse line items with Gemini.
+3. Participants claim items (including quantity-aware claims).
+4. SplitCheck calculates each person's owed amount, including shared costs like tax/tip/fees.
+5. Settlement views show net balances and simplified transfers.
+
+## Key features
+
+- Realtime multi-user collaboration with presence.
+- Receipt image upload from camera, file picker, drag-and-drop, or paste.
+- Quantity-aware claiming and automatic per-person share calculation.
+- Session dashboard with balances, transfers, and export tools.
+- Optimistic state updates with Supabase-backed persistence.
+
+## Tech stack
+
+- Next.js 14 (App Router) + React 18
+- Tailwind CSS + Shadcn-style UI primitives
+- Zustand for app state
+- Supabase (database + realtime)
+- Google Gemini for receipt extraction
+- Dexie (IndexedDB) local cache utilities
+
+## Local development
+
+### Prerequisites
+
+- Node.js 18+ (Node.js 20 recommended)
+- npm
+- Supabase project (URL + anon key)
+- Gemini API key
+
+### Setup
+
+```bash
+npm install
+cp .env.example .env.local
+```
+
+Fill in values in `.env.local`:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_GEMINI_API_KEY` (dev/prototyping)
+- `GEMINI_API_KEY` (server-side `/api/extract-receipt`)
+
+### Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `npm run dev` - start local development server
+- `npm run build` - build production bundle
+- `npm run start` - run production server
+- `npm run lint` - run ESLint checks
 
-## Learn More
+## Architecture at a glance
 
-To learn more about Next.js, take a look at the following resources:
+- UI routes and product flows live in `src/app/*`.
+- Shared state and persistence logic live in `src/lib/store.ts`.
+- Realtime sync hooks live in `src/hooks/use-realtime-session.ts` and `src/hooks/use-presence.ts`.
+- Split math and settlement logic live in `src/lib/calculations.ts`.
+- Receipt extraction pipeline is handled by `src/components/receipt/ReceiptUploader.tsx` and `src/app/api/extract-receipt/route.ts`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Data model summary
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- A **session** contains participants and receipts.
+- A **receipt** contains line items, payer, subtotal/total, and shared costs.
+- A **line item** includes `description`, `quantity`, `unitPrice`, `totalPrice`, and `claimedBy`.
+- Claims are represented by participant names in `claimedBy`:
+  - For qty `<= 1`, unique claimers split item cost evenly.
+  - For qty `> 1`, claim counts determine proportional shares.
 
-## Deploy on Vercel
+## Core user flow
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Home (`/`): create session or open an existing one.
+- Join (`/join/[code]`): join by share code.
+- Session pages (`/session/[id]`): manage receipts and participants.
+- Receipt detail (`/session/[id]/receipt/[rid]`): claim, edit, and delete items.
+- Dashboard (`/session/[id]/dashboard`): review totals and settlement transfers.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Troubleshooting
+
+- **Gemini errors or rate limits**: verify `GEMINI_API_KEY`, then retry after cooldown.
+- **No realtime updates**: check Supabase credentials and realtime table subscriptions.
+- **Parsing quality is poor**: retake image with better lighting, framing, and focus.
+- **Sync issues**: confirm network access and Supabase project status.
+
+## Known limitations
+
+- OCR quality depends on image clarity and receipt formatting.
+- No automated test suite is currently configured in this repository.
+- Complex or ambiguous receipt layouts may still need manual edits.
+
+## Roadmap ideas
+
+- Add automated integration/e2e tests for core claim/split flows.
+- Improve OCR fallback handling for noisy receipts.
+- Expand export and settlement reporting options.
+- Add stronger offline-first conflict handling UX.
+
+## Contributing
+
+Please open an issue or PR with a clear description of the bug/feature and repro steps where possible.

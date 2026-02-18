@@ -1,7 +1,5 @@
-import {
-  getGeminiVisionModel,
-  type GeminiReceiptResponse,
-} from "@/lib/gemini/client";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import type { GeminiReceiptResponse } from "@/lib/gemini/types";
 
 const EXTRACTION_PROMPT = `You are a receipt OCR specialist. Analyze this receipt image and extract all data into structured JSON.
 Rules:
@@ -73,68 +71,90 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
+const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_MAX_RETRIES = 4;
+const BACKOFF_BASE_MS = 1_000;
+const BACKOFF_MAX_MS = 30_000;
+
+export type ExtractReceiptOptions = {
+  apiKey: string;
+  model: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+};
+
+export type ReceiptExtractionResult =
+  | {
+      success: true;
+      data: GeminiReceiptResponse;
+      retryAfterSec: number;
+    }
+  | {
+      success: false;
+      error: string;
+      code: "invalid_json" | "invalid_structure" | "rate_limited" | "upstream_error";
+      retryAfterSec: number;
+    };
+
 /** Maps Gemini SDK and network errors into user-friendly extraction messages. */
 function mapGeminiError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Gemini error";
   const lower = message.toLowerCase();
 
   if (lower.includes("timeout")) {
-    return "Receipt extraction timed out. Try a clearer image or retry in a moment.";
+    return "Receipt extraction timed out. Please try again.";
   }
   if (lower.includes("quota") || lower.includes("resource_exhausted")) {
     return "Gemini quota exceeded. Please try again later.";
   }
   if (lower.includes("rate") || lower.includes("429")) {
-    return "Too many extraction requests right now. Please retry shortly.";
+    return "Too many extraction requests. Please try again shortly.";
   }
   if (
     lower.includes("api key") ||
     lower.includes("permission denied") ||
-    lower.includes("unauthorized") ||
-    lower.includes("invalid")
+    lower.includes("unauthorized")
   ) {
-    return "Gemini API key is invalid or missing permissions. Check your API key configuration.";
+    return "Gemini API key is invalid or unauthorized.";
   }
-  if (lower.includes("network") || lower.includes("fetch")) {
-    return "Network error while contacting Gemini. Check your connection and try again.";
-  }
-
-  return "Could not extract this receipt right now. Please try again.";
+  return "Could not extract receipt data right now. Please retry.";
 }
 
-type ExtractionResult =
-  | {
-      success: true;
-      data: GeminiReceiptResponse;
-    }
-  | {
-      success: false;
-      error: string;
-    };
-
-function isRateLimitError(error: unknown): boolean {
-  if (typeof error === "object" && error !== null && "status" in error) {
-    const status = (error as { status?: unknown }).status;
-    if (status === 429) return true;
-  }
+/** Detects Gemini quota/rate limiting errors from SDK responses. */
+function isQuotaOrRateError(error: unknown): boolean {
+  const status =
+    typeof error === "object" && error !== null && "status" in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (status === 429) return true;
   const message = error instanceof Error ? error.message : String(error ?? "");
   const lower = message.toLowerCase();
   return (
     lower.includes("429") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("quota") ||
     lower.includes("rate limit") ||
-    lower.includes("too many requests") ||
-    lower.includes("resource_exhausted")
+    lower.includes("too many requests")
   );
 }
 
-function isRateLimitMessage(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("429") ||
-    lower.includes("rate limit") ||
-    lower.includes("too many requests") ||
-    lower.includes("resource_exhausted")
-  );
+/** Parses Gemini retry delay hints like `retryDelay: "8s"` from error text. */
+function getRetryDelayMs(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const match = message.match(/retrydelay["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)s["']?/i);
+  if (!match) return null;
+  const seconds = Number.parseFloat(match[1] ?? "");
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.round(seconds * 1000);
+}
+
+/** Computes next wait delay with jitter, honoring server-provided retry delay. */
+function computeBackoffMs(attempt: number, retryDelayMs: number | null): number {
+  const jitter = Math.floor(Math.random() * 500);
+  if (retryDelayMs !== null) {
+    return Math.min(BACKOFF_MAX_MS, retryDelayMs + jitter);
+  }
+  return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** attempt + jitter);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -143,96 +163,127 @@ async function sleep(ms: number): Promise<void> {
 
 async function extractReceiptAttempt(
   imageBase64: string,
-  mimeType: string
-): Promise<ExtractionResult> {
-  const model = getGeminiVisionModel();
-
-  // Approximate cost note (Gemini 2.0 Flash):
-  // ~ $0.10 / 1M input tokens. Typical receipt image ~250K tokens,
-  // so 1,000 scans are roughly ~$0.025.
-  let response: Awaited<ReturnType<typeof model.generateContent>>;
-  try {
-    response = await withTimeout(
-      model.generateContent([
-        EXTRACTION_PROMPT,
-        {
-          inlineData: {
-            data: imageBase64,
-            mimeType,
-          },
-        },
-      ]),
-      15_000
-    );
-  } catch (error) {
-    if (isRateLimitError(error)) {
-      return {
-        success: false,
-        error: "Rate limit reached — please wait 30 seconds and try again.",
-      };
-    }
-    return {
-      success: false,
-      error: mapGeminiError(error),
-    };
-  }
-
-  const rawText = response.response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText);
-  } catch {
-    return {
-      success: false,
-      error: "Gemini returned invalid JSON. Please retry with a clearer photo.",
-    };
-  }
-
-  if (!isGeminiReceiptResponse(parsed)) {
-    return {
-      success: false,
-      error: "Invalid response structure from Gemini",
-    };
-  }
-
-  return {
-    success: true,
-    data: parsed,
-  };
-}
-
-async function extractWithRetry(
-  imageBase64: string,
   mimeType: string,
-  maxRetries = 3
-): Promise<ExtractionResult> {
-  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
-    const result = await extractReceiptAttempt(imageBase64, mimeType);
-    if (result.success) return result;
+  options: ExtractReceiptOptions
+): Promise<
+  | { success: true; data: GeminiReceiptResponse }
+  | { success: false; error: unknown; retryAfterSec: number }
+> {
+  const client = new GoogleGenerativeAI(options.apiKey);
+  const model = client.getGenerativeModel({
+    model: options.model,
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
+  });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    if (!isRateLimitMessage(result.error)) return result;
-    if (attempt === maxRetries - 1) break;
+  let lastRetryAfterSec = 0;
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const geminiResponse = await withTimeout(
+        model.generateContent([
+          EXTRACTION_PROMPT,
+          {
+            inlineData: {
+              data: imageBase64,
+              mimeType,
+            },
+          },
+        ]),
+        timeoutMs
+      );
+      const rawText = geminiResponse.response.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        return {
+          success: false,
+          error: new Error("invalid_json"),
+          retryAfterSec: 0,
+        };
+      }
 
-    const delay = Math.min(1000 * 2 ** attempt, 10_000);
-    console.warn(
-      `Gemini rate limited. Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`
-    );
-    await sleep(delay);
+      if (!isGeminiReceiptResponse(parsed)) {
+        return {
+          success: false,
+          error: new Error("invalid_structure"),
+          retryAfterSec: 0,
+        };
+      }
+
+      return {
+        success: true,
+        data: parsed,
+      };
+    } catch (error) {
+      if (!isQuotaOrRateError(error) || attempt === maxRetries) {
+        return {
+          success: false,
+          error,
+          retryAfterSec: lastRetryAfterSec,
+        };
+      }
+      const hintedDelayMs = getRetryDelayMs(error);
+      const waitMs = computeBackoffMs(attempt, hintedDelayMs);
+      lastRetryAfterSec = Math.max(lastRetryAfterSec, Math.ceil(waitMs / 1000));
+      await sleep(waitMs);
+    }
   }
 
   return {
     success: false,
-    error: "Rate limit reached — please wait 30 seconds and try again.",
+    error: new Error("upstream_error"),
+    retryAfterSec: lastRetryAfterSec,
   };
 }
 
 /**
  * Extracts structured receipt data from a base64-encoded image using Gemini.
- * Note: for production, move this call to `/api/extract-receipt` so the API key stays server-side.
+ * Designed for server-side use from API routes and other backend modules.
  */
 export async function extractReceiptFromImage(
   imageBase64: string,
-  mimeType: string
-) {
-  return extractWithRetry(imageBase64, mimeType);
+  mimeType: string,
+  options: ExtractReceiptOptions
+): Promise<ReceiptExtractionResult> {
+  const extraction = await extractReceiptAttempt(imageBase64, mimeType, options);
+  if (extraction.success) {
+    return {
+      success: true,
+      data: extraction.data,
+      retryAfterSec: 0,
+    };
+  }
+
+  if (extraction.error instanceof Error && extraction.error.message === "invalid_json") {
+    return {
+      success: false,
+      error: "Gemini returned invalid JSON output.",
+      code: "invalid_json",
+      retryAfterSec: extraction.retryAfterSec,
+    };
+  }
+
+  if (extraction.error instanceof Error && extraction.error.message === "invalid_structure") {
+    return {
+      success: false,
+      error: "Invalid response structure from Gemini",
+      code: "invalid_structure",
+      retryAfterSec: extraction.retryAfterSec,
+    };
+  }
+
+  const rateLimited = isQuotaOrRateError(extraction.error);
+  return {
+    success: false,
+    error: mapGeminiError(extraction.error),
+    code: rateLimited ? "rate_limited" : "upstream_error",
+    retryAfterSec:
+      extraction.retryAfterSec > 0
+        ? extraction.retryAfterSec
+        : Math.ceil(BACKOFF_BASE_MS * 2 ** DEFAULT_MAX_RETRIES / 1000),
+  };
 }

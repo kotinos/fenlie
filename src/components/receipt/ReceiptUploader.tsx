@@ -15,7 +15,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
-import type { GeminiReceiptResponse } from "@/lib/gemini/client";
+import type { GeminiReceiptResponse } from "@/lib/gemini/types";
 import { compressImage, validateImage } from "@/lib/gemini/image-utils";
 import { Button } from "@/components/ui/button";
 

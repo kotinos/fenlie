@@ -2,7 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useReducer } from "react";
-import type { GeminiReceiptResponse } from "@/lib/gemini/client";
+import type { GeminiReceiptResponse } from "@/lib/gemini/types";
 import type { LineItem, Receipt } from "@/lib/cache/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

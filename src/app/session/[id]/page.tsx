@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ReceiptUploader } from "@/components/receipt/ReceiptUploader";
 import { ReceiptReviewForm } from "@/components/receipt/ReceiptReviewForm";
-import type { GeminiReceiptResponse } from "@/lib/gemini/client";
+import type { GeminiReceiptResponse } from "@/lib/gemini/types";
 import type { LineItem as CacheLineItem, Receipt as CacheReceipt } from "@/lib/cache/db";
 import {
   Drawer,

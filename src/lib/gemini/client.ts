@@ -11,21 +11,7 @@ if (!geminiApiKey || geminiApiKey === "your_gemini_api_key_here") {
 /** Shared Gemini SDK client for client-side extraction flows. */
 export const geminiClient = new GoogleGenerativeAI(geminiApiKey);
 
-export interface GeminiReceiptResponse {
-  store_name: string;
-  items: {
-    description: string;
-    quantity: number;
-    unit_price: number;
-    total_price: number;
-  }[];
-  subtotal: number | null;
-  tax: number | null;
-  tip: number | null;
-  total: number | null;
-  currency: string;
-  confidence: "high" | "medium" | "low";
-}
+export type { GeminiReceiptResponse } from "@/lib/gemini/types";
 
 /** Returns the preconfigured vision model for receipt parsing. */
 export function getGeminiVisionModel(): GenerativeModel {

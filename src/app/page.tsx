@@ -2,11 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState, type TouchEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Users, UserRoundPlus, X, PlusCircle } from "lucide-react";
+import { Link2, Users, UserRoundPlus, X } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PageContainer } from "@/components/layout/PageContainer";
 import {
   Drawer,
   DrawerContent,
@@ -130,7 +129,7 @@ function SessionCard({
   }, [offsetX, onTap]);
 
   return (
-    <div className="relative overflow-hidden rounded-2xl md:h-full">
+    <div className="relative overflow-hidden rounded-2xl">
       <div className="absolute inset-y-0 right-0 flex w-[92px] items-center justify-center bg-red-600">
         <button
           onClick={onLeave}
@@ -144,7 +143,7 @@ function SessionCard({
       </div>
 
       <div
-        className="relative cursor-pointer rounded-2xl border border-zinc-200 bg-white p-4 transition-transform duration-200 ease-out active:bg-zinc-50 md:h-full md:p-5 lg:p-6 dark:border-zinc-800 dark:bg-zinc-900 dark:active:bg-zinc-800"
+        className="relative cursor-pointer rounded-2xl border border-zinc-200 bg-white p-4 transition-transform duration-200 ease-out active:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:active:bg-zinc-800"
         style={{ transform: `translateX(${offsetX}px)` }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -280,15 +279,6 @@ function NewSessionDrawer({
     }
   }, [creatorName, extraParticipants, isSubmitting, onOpenChange, router, sessionName]);
 
-  const preventFocusScroll = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const el = e.currentTarget;
-    const orig = el.scrollIntoView;
-    el.scrollIntoView = () => {};
-    requestAnimationFrame(() => {
-      el.scrollIntoView = orig;
-    });
-  }, []);
-
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground>
       <DrawerContent>
@@ -309,7 +299,6 @@ function NewSessionDrawer({
                 className="h-12"
                 value={sessionName}
                 onChange={(e) => setSessionName(e.target.value)}
-                onFocus={preventFocusScroll}
                 autoFocus
               />
             </div>
@@ -324,7 +313,6 @@ function NewSessionDrawer({
                 className="h-12"
                 value={creatorName}
                 onChange={(e) => setCreatorName(e.target.value)}
-                onFocus={preventFocusScroll}
               />
               {creatorName.trim() ? (
                 <div className="pt-1">
@@ -346,7 +334,6 @@ function NewSessionDrawer({
                   value={nextParticipant}
                   onChange={(e) => setNextParticipant(e.target.value)}
                   placeholder="Add participant"
-                  onFocus={preventFocusScroll}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -656,14 +643,6 @@ export default function HomePage() {
     void loadMySessions();
   }, [loadMySessions]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("new") !== "1") return;
-    setNewDrawerOpen(true);
-    router.replace("/");
-  }, [router]);
-
   const leaveSession = useCallback(async (session: HomeSession) => {
     if (!session.myName) return;
     try {
@@ -685,75 +664,37 @@ export default function HomePage() {
     <div className="flex min-h-dvh flex-col">
       <PageHeader title="SplitCheck" />
 
-      <main className="flex-1 pb-40 pt-4 md:pb-8">
-        <PageContainer wide>
-          <div className="hidden items-center justify-end gap-3 pb-4 md:flex">
-            <Button
-              variant="outline"
-              className="h-11 text-sm md:min-h-0"
-              onClick={() => setJoinDrawerOpen(true)}
-            >
-              Join Session
-            </Button>
-            <Button className="h-11 text-sm md:min-h-0" onClick={() => setNewDrawerOpen(true)}>
-              <UserRoundPlus className="mr-2 h-4 w-4" />
-              New Session
-            </Button>
+      <main className="flex-1 px-4 pb-40 pt-4">
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Loading sessions...
           </div>
-
-          {isLoading ? (
-            <div className="py-8 text-center text-sm md:text-base text-zinc-500 dark:text-zinc-400">
-              Loading sessions...
+        ) : hasSessions ? (
+          <section className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {sessions.map((session) => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                onLeave={() => void leaveSession(session)}
+                onTap={() => router.push(`/session/${session.id}`)}
+              />
+            ))}
+          </section>
+        ) : (
+          <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-100 dark:bg-zinc-800">
+              <Users className="h-8 w-8 text-zinc-500 dark:text-zinc-300" />
             </div>
-          ) : hasSessions ? (
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <button
-                type="button"
-                onClick={() => setNewDrawerOpen(true)}
-                className="hidden h-44 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50 text-zinc-700 transition-colors hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary md:flex dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-300"
-              >
-                <PlusCircle className="h-7 w-7" />
-                <span className="mt-2 text-sm font-semibold">Create New Session</span>
-              </button>
-
-              {sessions.map((session) => (
-                <SessionCard
-                  key={session.id}
-                  session={session}
-                  onLeave={() => void leaveSession(session)}
-                  onTap={() => router.push(`/session/${session.id}`)}
-                />
-              ))}
-            </section>
-          ) : (
-            <div className="flex min-h-[56vh] flex-col items-center justify-center text-center md:min-h-[64vh]">
-              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-100 md:h-20 md:w-20 dark:bg-zinc-800">
-                <Users className="h-8 w-8 text-zinc-500 md:h-10 md:w-10 dark:text-zinc-300" />
-              </div>
-              <h2 className="text-lg font-semibold md:text-2xl">No sessions yet</h2>
-              <p className="mt-1 max-w-[280px] text-sm text-zinc-500 md:mt-2 md:max-w-xl md:text-base dark:text-zinc-400">
-                Create a new session or join one with a code
-              </p>
-              <div className="mt-5 hidden gap-3 md:flex">
-                <Button className="h-11 md:min-h-0" onClick={() => setNewDrawerOpen(true)}>
-                  <UserRoundPlus className="mr-2 h-4 w-4" />
-                  New Session
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 md:min-h-0"
-                  onClick={() => setJoinDrawerOpen(true)}
-                >
-                  Join Session
-                </Button>
-              </div>
-            </div>
-          )}
-        </PageContainer>
+            <h2 className="text-lg font-semibold">No sessions yet</h2>
+            <p className="mt-1 max-w-[280px] text-sm text-zinc-500 dark:text-zinc-400">
+              Create a new session or join one with a code
+            </p>
+          </div>
+        )}
       </main>
 
       <div
-        className="pointer-events-none fixed inset-x-0 z-30 md:hidden"
+        className="pointer-events-none fixed inset-x-0 z-30"
         style={{ bottom: "calc(64px + env(safe-area-inset-bottom, 0px) + 12px)" }}
       >
         <div className="pointer-events-auto mx-auto flex w-full max-w-lg gap-2 px-4 md:flex-row">

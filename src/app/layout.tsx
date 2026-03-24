@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { ServiceWorkerRegistrar } from "@/components/service-worker-registrar";
+import { BottomNav } from "@/components/bottom-nav";
 import { SyncIndicator } from "@/components/sync-indicator";
-import { AppShell } from "@/components/layout/AppShell";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -21,7 +21,6 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  interactiveWidget: "resizes-content",
 };
 
 export const metadata: Metadata = {
@@ -48,7 +47,7 @@ export default function RootLayout({
       <head>
         <meta
           name="viewport"
-          content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+          content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
         />
         <meta name="theme-color" content="#18181b" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -58,8 +57,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ServiceWorkerRegistrar />
-        <AppShell>{children}</AppShell>
-        <SyncIndicator />
+        <div className="relative mx-auto min-h-dvh max-w-lg pb-[env(safe-area-inset-bottom)]">
+          {children}
+          <SyncIndicator />
+          <BottomNav />
+        </div>
         {/* Screen reader announcement region */}
         <div
           id="aria-live-region"

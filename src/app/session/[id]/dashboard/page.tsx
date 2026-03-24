@@ -6,7 +6,6 @@ import { ArrowUpFromLine } from "lucide-react";
 import { useRealtimeSession } from "@/hooks/use-realtime-session";
 import { usePresence } from "@/hooks/use-presence";
 import { PageHeader } from "@/components/page-header";
-import { PageContainer } from "@/components/layout/PageContainer";
 import { ShareSession } from "@/components/share-session";
 import { OnlineNowBanner } from "@/components/dashboard/online-now-banner";
 import {
@@ -201,55 +200,51 @@ export default function DashboardPage() {
         }
       />
 
-      <main className="pb-28 pt-4 md:pb-8">
-        <PageContainer wide>
-          <div className="space-y-4">
-            <OnlineNowBanner
-              onlineUsers={onlineUsers}
-              currentUserName={currentUserName}
-              onShare={openShareDrawer}
-            />
+      <main className="space-y-4 px-4 pb-28 pt-4">
+        <OnlineNowBanner
+          onlineUsers={onlineUsers}
+          currentUserName={currentUserName}
+          onShare={openShareDrawer}
+        />
 
-            <WarningsSection
-              warnings={warnings}
-              onNavigate={(href) => router.push(href)}
-            />
+        <WarningsSection
+          warnings={warnings}
+          onNavigate={(href) => router.push(href)}
+        />
 
-            {currentUserSummary && (
-              <YourSummaryCard
-                itemTotal={currentUserSummary.itemTotal}
-                taxShare={currentUserSummary.taxShare}
-                tipShare={currentUserSummary.tipShare}
-                feeShare={currentUserSummary.feeShare}
-                totalOwed={currentUserSummary.totalOwed}
-                totalPaid={currentUserSummary.totalPaid}
-              />
-            )}
+        {currentUserSummary && (
+          <YourSummaryCard
+            itemTotal={currentUserSummary.itemTotal}
+            taxShare={currentUserSummary.taxShare}
+            tipShare={currentUserSummary.tipShare}
+            feeShare={currentUserSummary.feeShare}
+            totalOwed={currentUserSummary.totalOwed}
+            totalPaid={currentUserSummary.totalPaid}
+          />
+        )}
 
-            <section className="space-y-2">
-              <h2 className="text-base font-semibold text-zinc-100 md:text-xl">Who Pays Whom</h2>
-              <SettlementTransfers
-                sessionId={session.id}
-                transfers={settlement.transfers}
-                currentUserName={currentUserName}
-                participantColors={session.participantColors}
-              />
-            </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-semibold text-zinc-100">Who Pays Whom</h2>
+          <SettlementTransfers
+            sessionId={session.id}
+            transfers={settlement.transfers}
+            currentUserName={currentUserName}
+            participantColors={session.participantColors}
+          />
+        </section>
 
-            <section className="space-y-2">
-              <h2 className="text-base font-semibold text-zinc-100 md:text-xl">
-                Breakdown by Person
-              </h2>
-              <PersonBreakdown
-                balances={settlement.balances}
-                participants={session.participants}
-                receipts={session.receipts}
-                participantColors={session.participantColors}
-                currentUserName={currentUserName}
-              />
-            </section>
-          </div>
-        </PageContainer>
+        <section className="space-y-2">
+          <h2 className="text-base font-semibold text-zinc-100">
+            Breakdown by Person
+          </h2>
+          <PersonBreakdown
+            balances={settlement.balances}
+            participants={session.participants}
+            receipts={session.receipts}
+            participantColors={session.participantColors}
+            currentUserName={currentUserName}
+          />
+        </section>
       </main>
 
       <ExportDrawer

@@ -43,38 +43,6 @@ function notifySyncError(message: string, error: unknown) {
   announce(`${message}. Please retry.`);
 }
 
-function toCents(value: number): number {
-  return Math.round(value * 100);
-}
-
-function fromCents(value: number): number {
-  return value / 100;
-}
-
-function getClaimLimit(quantity: number): number {
-  const numeric = Number(quantity);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 1;
-  if (Number.isInteger(numeric) && numeric > 1) return Math.trunc(numeric);
-  return 1;
-}
-
-function allowsSharedSingleClaims(quantity: number): boolean {
-  return getClaimLimit(quantity) <= 1;
-}
-
-function normalizeClaimsByLimit(claimedBy: string[], quantity: number): string[] {
-  if (allowsSharedSingleClaims(quantity)) {
-    // qty:1 rows support many claimers, but each person can only appear once.
-    return Array.from(new Set(claimedBy.filter(Boolean)));
-  }
-  const limit = getClaimLimit(quantity);
-  return claimedBy.slice(0, limit);
-}
-
-function getPersonClaimQty(claimedBy: string[], participantName: string): number {
-  return claimedBy.reduce((count, person) => (person === participantName ? count + 1 : count), 0);
-}
-
 function recalcReceipt(receipt: Receipt): Receipt {
   const subtotal = receipt.lineItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const total =
@@ -86,14 +54,13 @@ function recalcReceipt(receipt: Receipt): Receipt {
 }
 
 function mapDbLineItem(item: DbLineItem): LineItem {
-  const quantity = Number(item.quantity);
   return {
     id: item.id,
     description: item.description,
-    quantity,
+    quantity: Number(item.quantity),
     unitPrice: Number(item.unit_price),
     totalPrice: Number(item.total_price),
-    claimedBy: normalizeClaimsByLimit(item.claimed_by ?? [], quantity),
+    claimedBy: item.claimed_by ?? [],
     isEdited: item.is_edited,
   };
 }
@@ -152,15 +119,8 @@ type SplitCheckState = {
   deleteLineItem: (receiptId: string, lineItemId: string) => void;
   claimItem: (receiptId: string, lineItemId: string, participantName: string) => void;
   unclaimItem: (receiptId: string, lineItemId: string, participantName: string) => void;
-  setItemClaimQuantity: (
-    receiptId: string,
-    lineItemId: string,
-    participantName: string,
-    quantity: number
-  ) => void;
   claimAllItems: (receiptId: string, participantName: string) => void;
   splitAllItemsEqually: (receiptId: string) => void;
-  splitAllItemsToSingleQuantity: (receiptId: string, resetClaims?: boolean) => void;
   clearAllClaims: (receiptId: string) => void;
   setPayer: (receiptId: string, participantName: string) => void;
   updateSharedCosts: (receiptId: string, costs: SharedCosts) => void;
@@ -458,14 +418,9 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
           ? r
           : recalcReceipt({
               ...r,
-              lineItems: r.lineItems.map((li) => {
-                if (li.id !== lineItemId) return li;
-                const nextLineItem = { ...li, ...patch };
-                return {
-                  ...nextLineItem,
-                  claimedBy: normalizeClaimsByLimit(nextLineItem.claimedBy, nextLineItem.quantity),
-                };
-              }),
+              lineItems: r.lineItems.map((li) =>
+                li.id === lineItemId ? { ...li, ...patch } : li
+              ),
             })
       ),
     }));
@@ -532,27 +487,6 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
   },
 
   claimItem: (receiptId, lineItemId, participantName) => {
-    const receipt = get()
-      .sessions.flatMap((s) => s.receipts)
-      .find((r) => r.id === receiptId);
-    const item = receipt?.lineItems.find((li) => li.id === lineItemId);
-    if (!item) return;
-    const currentQty = getPersonClaimQty(item.claimedBy, participantName);
-    get().setItemClaimQuantity(receiptId, lineItemId, participantName, currentQty + 1);
-  },
-
-  unclaimItem: (receiptId, lineItemId, participantName) => {
-    const receipt = get()
-      .sessions.flatMap((s) => s.receipts)
-      .find((r) => r.id === receiptId);
-    const item = receipt?.lineItems.find((li) => li.id === lineItemId);
-    if (!item) return;
-    const currentQty = getPersonClaimQty(item.claimedBy, participantName);
-    get().setItemClaimQuantity(receiptId, lineItemId, participantName, currentQty - 1);
-  },
-
-  setItemClaimQuantity: (receiptId, lineItemId, participantName, quantity) => {
-    const targetQty = Math.max(0, Math.trunc(quantity));
     const prev = get().sessions;
     const next = prev.map((s) => ({
       ...s,
@@ -561,45 +495,50 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
           ? r
           : {
               ...r,
-              lineItems: r.lineItems.map((li) => {
-                if (li.id !== lineItemId) return li;
-                const claimLimit = getClaimLimit(li.quantity);
-                if (claimLimit <= 1) {
-                  const dedupedClaims = Array.from(new Set(li.claimedBy.filter(Boolean)));
-                  if (targetQty <= 0) {
-                    return {
-                      ...li,
-                      claimedBy: dedupedClaims.filter((p) => p !== participantName),
-                    };
-                  }
-                  if (dedupedClaims.includes(participantName)) {
-                    return { ...li, claimedBy: dedupedClaims };
-                  }
-                  return {
-                    ...li,
-                    claimedBy: [...dedupedClaims, participantName],
-                  };
-                }
-                const otherClaims = li.claimedBy.filter((p) => p !== participantName);
-                const maxForPerson = Math.max(0, claimLimit - otherClaims.length);
-                const clampedQty = Math.min(targetQty, maxForPerson);
-                return {
-                  ...li,
-                  claimedBy: [...otherClaims, ...Array.from({ length: clampedQty }, () => participantName)],
-                };
-              }),
+              lineItems: r.lineItems.map((li) =>
+                li.id !== lineItemId || li.claimedBy.includes(participantName)
+                  ? li
+                  : { ...li, claimedBy: [...li.claimedBy, participantName] }
+              ),
             }
       ),
     }));
     set({ sessions: next, syncStatus: "syncing" });
-    const nextItem = next
-      .flatMap((s) => s.receipts)
-      .find((r) => r.id === receiptId)
-      ?.lineItems.find((li) => li.id === lineItemId);
-    lineItemsApi.update(lineItemId, { claimed_by: nextItem?.claimedBy ?? [] }).then(({ error }) => {
+    lineItemsApi.claimItem(lineItemId, participantName).then(({ error }) => {
       if (error) {
         set({ sessions: prev, syncStatus: "error" });
-        notifySyncError("Failed to update item claim quantity", error);
+        notifySyncError("Failed to claim item", error);
+        return;
+      }
+      set({ syncStatus: "synced" });
+    });
+  },
+
+  unclaimItem: (receiptId, lineItemId, participantName) => {
+    const prev = get().sessions;
+    const next = prev.map((s) => ({
+      ...s,
+      receipts: s.receipts.map((r) =>
+        r.id !== receiptId
+          ? r
+          : {
+              ...r,
+              lineItems: r.lineItems.map((li) =>
+                li.id !== lineItemId
+                  ? li
+                  : {
+                      ...li,
+                      claimedBy: li.claimedBy.filter((p) => p !== participantName),
+                    }
+              ),
+            }
+      ),
+    }));
+    set({ sessions: next, syncStatus: "syncing" });
+    lineItemsApi.unclaimItem(lineItemId, participantName).then(({ error }) => {
+      if (error) {
+        set({ sessions: prev, syncStatus: "error" });
+        notifySyncError("Failed to unclaim item", error);
         return;
       }
       set({ syncStatus: "synced" });
@@ -612,15 +551,9 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
       .find((r) => r.id === receiptId);
     if (!receipt) return;
     receipt.lineItems.forEach((item) => {
-      const claimLimit = getClaimLimit(item.quantity);
-      if (claimLimit <= 1) {
-        get().setItemClaimQuantity(receiptId, item.id, participantName, 1);
-        return;
+      if (!item.claimedBy.includes(participantName)) {
+        get().claimItem(receiptId, item.id, participantName);
       }
-      const currentPersonQty = getPersonClaimQty(item.claimedBy, participantName);
-      const othersQty = item.claimedBy.length - currentPersonQty;
-      const maxForPerson = Math.max(0, claimLimit - othersQty);
-      get().setItemClaimQuantity(receiptId, item.id, participantName, maxForPerson);
     });
   },
 
@@ -636,17 +569,7 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
           ? r
           : {
               ...r,
-              lineItems: r.lineItems.map((li) => {
-                const claimLimit = getClaimLimit(li.quantity);
-                if (claimLimit <= 1) {
-                  return { ...li, claimedBy: [...participants] };
-                }
-                const claims: string[] = [];
-                for (let i = 0; i < claimLimit; i += 1) {
-                  claims.push(participants[i % participants.length]);
-                }
-                return { ...li, claimedBy: claims };
-              }),
+              lineItems: r.lineItems.map((li) => ({ ...li, claimedBy: [...participants] })),
             }
       ),
     }));
@@ -665,141 +588,6 @@ export const useSplitCheckStore = create<SplitCheckState>((set, get) => ({
       }
       set({ syncStatus: "synced" });
     });
-  },
-
-  splitAllItemsToSingleQuantity: (receiptId, resetClaims = false) => {
-    const prev = get().sessions;
-    const targetSession = prev.find((s) => s.receipts.some((r) => r.id === receiptId));
-    const targetReceipt = targetSession?.receipts.find((r) => r.id === receiptId);
-    if (!targetSession || !targetReceipt) return;
-
-    const hasSplittable = targetReceipt.lineItems.some(
-      (item) => Number.isInteger(item.quantity) && item.quantity > 1
-    );
-    if (!hasSplittable) return;
-
-    const removedIds = new Set<string>();
-    const createdIds = new Set<string>();
-    const expandedItems: LineItem[] = [];
-
-    targetReceipt.lineItems.forEach((item) => {
-      if (!Number.isInteger(item.quantity) || item.quantity <= 1) {
-        expandedItems.push({
-          ...item,
-          claimedBy: resetClaims ? [] : item.claimedBy,
-        });
-        return;
-      }
-
-      removedIds.add(item.id);
-      const wholeQty = Math.trunc(item.quantity);
-      const totalCents = toCents(item.totalPrice);
-      const unitCents = toCents(item.unitPrice);
-      let allocatedCents = 0;
-
-      for (let i = 0; i < wholeQty; i += 1) {
-        const isLast = i === wholeQty - 1;
-        const remainingCents = totalCents - allocatedCents;
-        const pieceCents = isLast ? remainingCents : Math.max(0, Math.min(unitCents, remainingCents));
-        allocatedCents += pieceCents;
-        const pieceAmount = fromCents(pieceCents);
-        const newId = crypto.randomUUID();
-        createdIds.add(newId);
-        expandedItems.push({
-          id: newId,
-          description: item.description,
-          quantity: 1,
-          unitPrice: pieceAmount,
-          totalPrice: pieceAmount,
-          claimedBy: [],
-          isEdited: item.isEdited,
-        });
-      }
-    });
-
-    const next = prev.map((session) =>
-      session.id !== targetSession.id
-        ? session
-        : {
-            ...session,
-            receipts: session.receipts.map((receipt) =>
-              receipt.id !== receiptId
-                ? receipt
-                : recalcReceipt({
-                    ...receipt,
-                    lineItems: expandedItems,
-                  })
-            ),
-          }
-    );
-    set({ sessions: next, syncStatus: "syncing" });
-
-    const nextReceipt = next
-      .flatMap((session) => session.receipts)
-      .find((receipt) => receipt.id === receiptId);
-    if (!nextReceipt) {
-      set({ sessions: prev, syncStatus: "error" });
-      notifySyncError("Failed to split items to quantity 1", new Error("Receipt not found"));
-      return;
-    }
-
-    Promise.all(
-      targetReceipt.lineItems
-        .filter((item) => removedIds.has(item.id))
-        .map((item) => lineItemsApi.remove(item.id))
-    )
-      .then(async (removeResults) => {
-        const removeFailed = removeResults.find((r) => r.error);
-        if (removeFailed?.error) {
-          set({ sessions: prev, syncStatus: "error" });
-          notifySyncError("Failed to split items to quantity 1", removeFailed.error);
-          return;
-        }
-
-        const writeResults = await Promise.all(
-          nextReceipt.lineItems.map((item, index) => {
-            if (createdIds.has(item.id)) {
-              return lineItemsApi.create({
-                id: item.id,
-                receipt_id: receiptId,
-                description: item.description,
-                quantity: item.quantity,
-                unit_price: item.unitPrice,
-                total_price: item.totalPrice,
-                claimed_by: item.claimedBy,
-                is_edited: item.isEdited,
-                sort_order: index,
-              });
-            }
-            return lineItemsApi.update(item.id, {
-              claimed_by: item.claimedBy,
-              sort_order: index,
-            });
-          })
-        );
-        const writeFailed = writeResults.find((r) => r.error);
-        if (writeFailed?.error) {
-          set({ sessions: prev, syncStatus: "error" });
-          notifySyncError("Failed to split items to quantity 1", writeFailed.error);
-          return;
-        }
-
-        const receiptUpdate = await receiptsApi.update(receiptId, {
-          subtotal: nextReceipt.subtotal,
-          total: nextReceipt.total,
-        });
-        if (receiptUpdate.error) {
-          set({ sessions: prev, syncStatus: "error" });
-          notifySyncError("Failed to split items to quantity 1", receiptUpdate.error);
-          return;
-        }
-
-        set({ syncStatus: "synced" });
-      })
-      .catch((error) => {
-        set({ sessions: prev, syncStatus: "error" });
-        notifySyncError("Failed to split items to quantity 1", error);
-      });
   },
 
   clearAllClaims: (receiptId) => {

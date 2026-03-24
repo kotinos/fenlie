@@ -1,89 +1,5 @@
 import type { Receipt, Session, LineItem } from "./store";
 
-function getItemQuantity(item: LineItem): number {
-  const qty = Number(item.quantity);
-  return Number.isFinite(qty) && qty > 0 ? qty : 1;
-}
-
-function toCents(value: number): number {
-  return Math.round(value * 100);
-}
-
-function fromCents(value: number): number {
-  return value / 100;
-}
-
-function isSharedSingleQuantityItem(item: LineItem): boolean {
-  const qty = Number(item.quantity);
-  if (!Number.isFinite(qty) || qty <= 0) return true;
-  return !Number.isInteger(qty) || qty <= 1;
-}
-
-function getUniqueClaimersInOrder(claimedBy: string[]): string[] {
-  return Array.from(new Set(claimedBy.filter(Boolean)));
-}
-
-/**
- * Returns per-person item shares in dollars.
- * - qty <= 1 (or non-integer): split equally across all unique claimers
- * - qty > 1 (integer): split proportionally by claimed units
- * Rounding is applied in cents and any remainder is assigned to the first claimer.
- */
-export function calculateItemPersonShares(item: LineItem): Record<string, number> {
-  if (isSharedSingleQuantityItem(item)) {
-    const claimers = getUniqueClaimersInOrder(item.claimedBy);
-    if (claimers.length === 0) return {};
-    const totalCents = toCents(item.totalPrice);
-    const roundedPerPerson = Math.round(totalCents / claimers.length);
-    const sharesInCents: Record<string, number> = {};
-    let allocated = 0;
-    claimers.forEach((person) => {
-      sharesInCents[person] = roundedPerPerson;
-      allocated += roundedPerPerson;
-    });
-    const remainder = totalCents - allocated;
-    sharesInCents[claimers[0]] = (sharesInCents[claimers[0]] ?? 0) + remainder;
-    return Object.fromEntries(
-      Object.entries(sharesInCents).map(([person, cents]) => [person, fromCents(cents)])
-    );
-  }
-
-  const qty = Math.max(1, Math.trunc(getItemQuantity(item)));
-  const totalCents = toCents(item.totalPrice);
-  const counts = item.claimedBy.reduce<Record<string, number>>((acc, name) => {
-    if (!name) return acc;
-    acc[name] = (acc[name] ?? 0) + 1;
-    return acc;
-  }, {});
-  const claimers = Object.keys(counts).filter((name) => (counts[name] ?? 0) > 0);
-  if (claimers.length === 0) return {};
-
-  const claimedQty = Math.min(item.claimedBy.length, qty);
-  const targetClaimedTotalCents = Math.round((totalCents * claimedQty) / qty);
-  const sharesInCents: Record<string, number> = {};
-  let allocated = 0;
-  claimers.forEach((person) => {
-    const claimedUnits = counts[person] ?? 0;
-    const cents = Math.round((totalCents * claimedUnits) / qty);
-    sharesInCents[person] = cents;
-    allocated += cents;
-  });
-  const remainder = targetClaimedTotalCents - allocated;
-  const firstClaimer = getUniqueClaimersInOrder(item.claimedBy).find(
-    (name) => name in sharesInCents
-  );
-  if (firstClaimer) {
-    sharesInCents[firstClaimer] = (sharesInCents[firstClaimer] ?? 0) + remainder;
-  }
-  return Object.fromEntries(
-    Object.entries(sharesInCents).map(([person, cents]) => [person, fromCents(cents)])
-  );
-}
-
-function getTotalClaimedQty(item: LineItem): number {
-  return item.claimedBy.length;
-}
-
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
@@ -135,9 +51,8 @@ export type UnclaimedItem = {
 /**
  * Calculate how much a single person owes on a single receipt.
  *
- * The person's share of each line item is computed by claim mode:
- * - qty <= 1: split equally across all unique claimers
- * - qty > 1: split proportionally by claimed units
+ * The person's share of each line item is `item.totalPrice / item.claimedBy.length`
+ * for every item where `claimedBy` includes the person.
  *
  * Shared costs (tax, tip, fees) are distributed proportionally based on the
  * ratio of the person's item total to the receipt subtotal.
@@ -156,10 +71,12 @@ export function calculatePersonReceiptTotal(
   receipt: Receipt,
   personName: string
 ): PersonReceiptTotal {
-  // Sum of the person's share of each claimed item.
+  // Sum of the person's share of each claimed item
   const itemTotal = receipt.lineItems.reduce((sum, item) => {
-    const shares = calculateItemPersonShares(item);
-    return sum + (shares[personName] ?? 0);
+    if (!item.claimedBy.includes(personName) || item.claimedBy.length === 0) {
+      return sum;
+    }
+    return sum + item.totalPrice / item.claimedBy.length;
   }, 0);
 
   // Proportional share ratio (guard against division by zero)
@@ -298,9 +215,7 @@ export function getUnclaimedItems(session: Session): UnclaimedItem[] {
 
   for (const receipt of session.receipts) {
     for (const item of receipt.lineItems) {
-      const itemQty = getItemQuantity(item);
-      const claimedQty = getTotalClaimedQty(item);
-      if (claimedQty < itemQty) {
+      if (item.claimedBy.length === 0) {
         result.push({
           receiptId: receipt.id,
           receiptName: receipt.restaurantName,
